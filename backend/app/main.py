@@ -1,4 +1,5 @@
 """Base Camp OS - Standalone Data Fusion Platform"""
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -26,6 +27,8 @@ from app.storage.minio_client import get_minio_client
 from app.events.nats_client import NATSClient, get_nats_client
 from app.vectors.qdrant_client import VectorClient
 from app.graph.neo4j_client import Neo4jClient, close_neo4j_client
+from app.connectors.manager import get_connector_manager
+from app.connectors.base import ConnectorConfig
 
 # Observability imports
 from app.observability import (
@@ -88,6 +91,22 @@ async def lifespan(app: FastAPI):
         logger.info("Neo4j connected")
     except Exception as e:
         logger.warning("Neo4j initialization failed — graph operations unavailable", error=str(e))
+
+    # --- Connectors (auto-register from env vars) ---
+    try:
+        manager = get_connector_manager()
+        netcraft_key = os.environ.get("NETCRAFT_API_KEY")
+        if netcraft_key:
+            netcraft_brand = os.environ.get("NETCRAFT_BRAND", "")
+            manager.register_connector(ConnectorConfig(
+                name="netcraft",
+                connector_type="netcraft",
+                api_key=netcraft_key,
+                config={"brand": netcraft_brand},
+            ))
+            logger.info(f"Netcraft connector auto-registered | brand={netcraft_brand}")
+    except Exception as e:
+        logger.warning(f"Connector auto-registration failed: {e}")
 
     logger.info("Base Camp OS startup complete")
     yield

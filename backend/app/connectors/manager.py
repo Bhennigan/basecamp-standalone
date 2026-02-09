@@ -9,6 +9,7 @@ from .shodan_connector import ShodanConnector
 from .zerofox_connector import ZeroFoxConnector
 from .sherlock_connector import SherlockConnector
 from .harvester_connector import HarvesterConnector
+from .netcraft_connector import NetcraftConnector
 
 logger = logging.getLogger(__name__)
 
@@ -16,19 +17,20 @@ logger = logging.getLogger(__name__)
 class ConnectorManager:
     """
     Manages registration, lifecycle, and scheduling of OSINT connectors.
-    
+
     This manager provides a centralized interface for:
     - Registering and configuring connectors
     - Managing connector lifecycle (connect, disconnect)
     - Scheduling periodic polling
     - Aggregating results from multiple connectors
     """
-    
+
     CONNECTOR_TYPES: Dict[str, Type[BaseConnector]] = {
         "shodan": ShodanConnector,
         "zerofox": ZeroFoxConnector,
         "sherlock": SherlockConnector,
         "harvester": HarvesterConnector,
+        "netcraft": NetcraftConnector,
     }
     
     def __init__(self):

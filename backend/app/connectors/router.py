@@ -78,7 +78,8 @@ async def list_connector_types():
             "shodan": "Shodan API for infrastructure reconnaissance",
             "zerofox": "ZeroFox API for impersonation and threat alerts",
             "sherlock": "Sherlock CLI for username searches",
-            "harvester": "TheHarvester CLI for email and domain reconnaissance"
+            "harvester": "TheHarvester CLI for email and domain reconnaissance",
+            "netcraft": "Netcraft API for takedown intelligence and brand protection"
         }
     }
 

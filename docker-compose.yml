@@ -118,6 +118,8 @@ services:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: basecamp123
       NATS_URL: nats://nats:4222
+      NETCRAFT_API_KEY: fddc07196a4366d72e26a559ce76f7ae
+      NETCRAFT_BRAND: usarmy
     ports:
       - "8001:8000"
     depends_on:

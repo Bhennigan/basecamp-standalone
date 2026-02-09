@@ -16,6 +16,7 @@ from .shodan_connector import ShodanConnector
 from .zerofox_connector import ZeroFoxConnector
 from .sherlock_connector import SherlockConnector
 from .harvester_connector import HarvesterConnector
+from .netcraft_connector import NetcraftConnector
 
 __all__ = [
     "BaseConnector",
@@ -27,4 +28,5 @@ __all__ = [
     "ZeroFoxConnector",
     "SherlockConnector",
     "HarvesterConnector",
+    "NetcraftConnector",
 ]
