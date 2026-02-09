@@ -104,7 +104,7 @@ async def list_entities(
             "threat_level": e.threat_level,
             "source": e.source,
             "tags": e.tags,
-            "metadata": e.metadata,
+            "metadata": e.entity_metadata,
             "first_seen": e.first_seen.isoformat(),
             "last_seen": e.last_seen.isoformat(),
         } for e in entities],

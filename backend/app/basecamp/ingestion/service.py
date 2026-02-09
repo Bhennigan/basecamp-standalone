@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json as json_lib
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import and_, select
 
@@ -332,7 +332,7 @@ class IngestionService(BaseWorkspaceService):
         try:
             # Update state to analyzing
             job.state = IngestionState.ANALYZING
-            job.started_at = datetime.now(UTC)
+            job.started_at = datetime.utcnow()
             await self.session.flush()
 
             # Parse the file
@@ -345,7 +345,7 @@ class IngestionService(BaseWorkspaceService):
                 job.error_message = "; ".join(
                     e.message for e in parse_result.errors[:5]
                 )
-                job.completed_at = datetime.now(UTC)
+                job.completed_at = datetime.utcnow()
                 await self.session.flush()
                 # Publish failure event
                 await self._publish_event_safe(
@@ -368,7 +368,7 @@ class IngestionService(BaseWorkspaceService):
                 from app.basecamp.schema.service import SchemaService
 
                 schema_service = SchemaService(self.session, self.role)
-                schema_name = f"auto_{job.file_name}_{job.id.hex[:8]}"
+                schema_name = f"auto_{job.file_name}_{str(job.id)[:8]}"
                 schema = await schema_service.create_schema_from_inferred(
                     name=schema_name,
                     inferred_schema=parse_result.inferred_schema,
@@ -429,7 +429,7 @@ class IngestionService(BaseWorkspaceService):
             job.state = IngestionState.COMPLETE
             job.processed_records = processed
             job.failed_records = failed
-            job.completed_at = datetime.now(UTC)
+            job.completed_at = datetime.utcnow()
             await self.session.flush()
 
             self.logger.info(
@@ -447,7 +447,7 @@ class IngestionService(BaseWorkspaceService):
             self.logger.error("Ingestion failed", job_id=str(job.id), error=str(e))
             job.state = IngestionState.FAILED
             job.error_message = str(e)
-            job.completed_at = datetime.now(UTC)
+            job.completed_at = datetime.utcnow()
             await self.session.flush()
             await self._publish_event_safe(
                 "failed", job=job, error_message=str(e)
@@ -596,14 +596,14 @@ class IngestionService(BaseWorkspaceService):
             for entity in entities:
                 try:
                     node_data = {
-                        "id": entity.id,
+                        "id": str(entity.id),
                         "entity_type": entity.type,
                         "value": entity.value,
                         "normalized_value": entity.normalized_value,
                         "confidence": entity.confidence,
                         "threat_level": entity.threat_level,
                         "source": entity.source,
-                        "workspace_id": self.workspace_id,
+                        "workspace_id": str(self.workspace_id),
                         "tags": entity.tags,
                         "metadata": entity.metadata,
                     }
@@ -626,10 +626,10 @@ class IngestionService(BaseWorkspaceService):
                         for b in group[i + 1:]:
                             try:
                                 await neo4j.create_relationship(
-                                    source_id=a.id,
-                                    target_id=b.id,
+                                    source_id=str(a.id),
+                                    target_id=str(b.id),
                                     relationship_type="ASSOCIATED_WITH",
-                                    properties={"reason": "same_source_record", "source_record_id": record_id},
+                                    properties={"reason": "same_source_record", "source_record_id": str(record_id)},
                                 )
                             except Exception:
                                 pass

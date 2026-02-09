@@ -1,5 +1,6 @@
 """Neo4j client for graph operations"""
 import os
+import uuid as _uuid
 from typing import List, Dict, Any, Optional
 from neo4j import AsyncGraphDatabase
 
@@ -22,6 +23,24 @@ class Neo4jClient:
             await self.driver.close()
             self.driver = None
             
+    @staticmethod
+    def _sanitize(props: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert UUID objects and other non-native types to Neo4j-safe values."""
+        clean: Dict[str, Any] = {}
+        for k, v in props.items():
+            if isinstance(v, _uuid.UUID):
+                clean[k] = str(v)
+            elif isinstance(v, list):
+                clean[k] = [str(i) if isinstance(i, _uuid.UUID) else i for i in v]
+            elif isinstance(v, dict):
+                # Neo4j doesn't support nested maps — skip or flatten
+                continue
+            elif v is None:
+                continue
+            else:
+                clean[k] = v
+        return clean
+
     async def create_entity_node(self, entity: Dict[str, Any]) -> str:
         if not self.driver:
             raise RuntimeError("Neo4j client not connected")
@@ -42,9 +61,11 @@ class Neo4jClient:
         tags = entity.get("tags", [])
         if tags:
             properties["tags"] = tags
+        properties = self._sanitize(properties)
+        node_id = str(entity["id"])
         query = f"MERGE (n:{label} {{id: $id}}) SET n += $properties RETURN n.id as id"
         async with self.driver.session() as session:
-            result = await session.run(query, id=entity["id"], properties=properties)
+            result = await session.run(query, id=node_id, properties=properties)
             record = await result.single()
             return record["id"] if record else entity["id"]
         
@@ -53,8 +74,9 @@ class Neo4jClient:
             raise RuntimeError("Neo4j client not connected")
         rel_type = relationship_type.upper().replace(" ", "_")
         query = f"MATCH (a {{id: $source_id}}) MATCH (b {{id: $target_id}}) MERGE (a)-[r:{rel_type}]->(b) SET r += $properties RETURN type(r)"
+        clean_props = self._sanitize(properties)
         async with self.driver.session() as session:
-            result = await session.run(query, source_id=source_id, target_id=target_id, properties=properties)
+            result = await session.run(query, source_id=str(source_id), target_id=str(target_id), properties=clean_props)
             record = await result.single()
             return record is not None
         
