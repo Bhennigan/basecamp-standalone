@@ -40,6 +40,7 @@ const CONNECTOR_TYPES = [
   { value: "harvester", label: "TheHarvester", description: "Email, domain, and subdomain OSINT" },
   { value: "shodan", label: "Shodan", description: "Internet-connected device search engine" },
   { value: "zerofox", label: "ZeroFox", description: "Digital risk protection platform" },
+  { value: "netcraft", label: "Netcraft", description: "Takedown intelligence and brand protection" },
 ]
 
 function ConnectorCard({
@@ -54,7 +55,7 @@ function ConnectorCard({
   testPending: boolean
 }) {
   const info = CONNECTOR_TYPES.find((t) => t.value === connector.type)
-  const isHealthy = connector.health === "healthy" || connector.status === "connected"
+  const isHealthy = connector.health === "healthy" || connector.status === "active" || connector.status === "connected"
 
   return (
     <Card className="border-border/50">
