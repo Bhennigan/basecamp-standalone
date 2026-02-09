@@ -508,25 +508,47 @@ class IngestionService(BaseWorkspaceService):
             for entity in deduplicated:
                 entity = EnrichmentService.enrich_entity(entity)
 
-            # Store in PostgreSQL
+            # Load existing entities for this workspace to handle upserts
+            existing_stmt = select(ExtractedEntity).where(
+                ExtractedEntity.workspace_id == self.workspace_id
+            )
+            existing_result = await self.session.execute(existing_stmt)
+            existing_map: dict[str, ExtractedEntity] = {
+                f"{e.entity_type}:{e.normalized_value}": e
+                for e in existing_result.scalars().all()
+            }
+
+            # Store in PostgreSQL (upsert: update existing, insert new)
             for entity in deduplicated:
                 try:
-                    db_entity = ExtractedEntity(
-                        id=entity.id,
-                        workspace_id=self.workspace_id,
-                        entity_type=entity.type,
-                        value=entity.value,
-                        normalized_value=entity.normalized_value,
-                        confidence=entity.confidence,
-                        threat_level=entity.threat_level,
-                        source=entity.source,
-                        source_record_id=entity.source_record_id,
-                        tags=entity.tags,
-                        entity_metadata=entity.metadata,
-                        first_seen=entity.first_seen,
-                        last_seen=entity.last_seen,
-                    )
-                    self.session.add(db_entity)
+                    key = f"{entity.type}:{entity.normalized_value}"
+                    existing = existing_map.get(key)
+                    if existing:
+                        # Update existing entity
+                        existing.last_seen = entity.last_seen
+                        existing.confidence = max(existing.confidence, entity.confidence)
+                        if entity.threat_level:
+                            existing.threat_level = entity.threat_level
+                        existing.tags = list(set((existing.tags or []) + entity.tags))
+                        existing.entity_metadata = {**(existing.entity_metadata or {}), **entity.metadata}
+                        entity.id = existing.id
+                    else:
+                        db_entity = ExtractedEntity(
+                            id=entity.id,
+                            workspace_id=self.workspace_id,
+                            entity_type=entity.type,
+                            value=entity.value,
+                            normalized_value=entity.normalized_value,
+                            confidence=entity.confidence,
+                            threat_level=entity.threat_level,
+                            source=entity.source,
+                            source_record_id=entity.source_record_id,
+                            tags=entity.tags,
+                            entity_metadata=entity.metadata,
+                            first_seen=entity.first_seen,
+                            last_seen=entity.last_seen,
+                        )
+                        self.session.add(db_entity)
                     all_entities.append(entity)
                 except Exception as e:
                     self.logger.warning(
