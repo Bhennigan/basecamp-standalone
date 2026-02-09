@@ -394,7 +394,7 @@ export function useBaseCampSchemas() {
   } = useQuery<BaseCampSchema[]>({
     queryKey: ["basecamp", "schemas", workspaceId],
     queryFn: async () => {
-      const response = await client.get("/api/basecamp/schemas/", {
+      const response = await client.get("/api/basecamp/schemas", {
         params: { workspace_id: workspaceId },
       })
       return response.data
@@ -405,7 +405,7 @@ export function useBaseCampSchemas() {
   const { mutateAsync: createSchema, isPending: createSchemaPending } =
     useMutation<BaseCampSchema, Error, BaseCampSchemaCreate>({
       mutationFn: async (data) => {
-        const response = await client.post("/api/basecamp/schemas/", data, {
+        const response = await client.post("/api/basecamp/schemas", data, {
           params: { workspace_id: workspaceId },
         })
         return response.data
@@ -676,7 +676,7 @@ export function useBaseCampEntities(params?: {
       const response = await client.get("/api/enrichment/entities", {
         params: { workspace_id: workspaceId, ...params },
       })
-      return response.data
+      return response.data?.entities ?? response.data
     },
     enabled: !!workspaceId,
   })
@@ -816,7 +816,7 @@ export function useBaseCampConnectors() {
   } = useQuery<BaseCampConnector[]>({
     queryKey: ["basecamp", "connectors", workspaceId],
     queryFn: async () => {
-      const response = await client.get("/api/connectors/", {
+      const response = await client.get("/api/connectors", {
         params: { workspace_id: workspaceId },
       })
       return response.data
@@ -831,7 +831,7 @@ export function useBaseCampConnectors() {
       { name: string; type: string; config?: Record<string, unknown> }
     >({
       mutationFn: async (data) => {
-        const response = await client.post("/api/connectors/", data, {
+        const response = await client.post("/api/connectors", data, {
           params: { workspace_id: workspaceId },
         })
         return response.data

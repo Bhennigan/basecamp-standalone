@@ -67,39 +67,41 @@ function formatFileSize(bytes: number): string {
   return `${Number.parseFloat((bytes / k ** i).toFixed(2))} ${sizes[i]}`
 }
 
-function getStatusBadge(status: BaseCampIngestionJob["status"]) {
-  switch (status) {
-    case "pending":
-      return (
-        <Badge className="bg-yellow-500/10 text-yellow-500 hover:bg-yellow-500/20 border-yellow-500/20">
-          <Clock className="mr-1 size-3" />
-          Received
-        </Badge>
-      )
-    case "running":
-      return (
-        <Badge className="bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 border-blue-500/20">
-          <Loader2 className="mr-1 size-3 animate-spin" />
-          Analyzing
-        </Badge>
-      )
-    case "completed":
-      return (
-        <Badge className="bg-green-500/10 text-green-500 hover:bg-green-500/20 border-green-500/20">
-          <CheckCircle className="mr-1 size-3" />
-          Complete
-        </Badge>
-      )
-    case "failed":
-      return (
-        <Badge className="bg-red-500/10 text-red-500 hover:bg-red-500/20 border-red-500/20">
-          <XCircle className="mr-1 size-3" />
-          Failed
-        </Badge>
-      )
-    default:
-      return null
+function getStatusBadge(status: string) {
+  const s = (status || "").toLowerCase()
+  if (s === "received" || s === "pending") {
+    return (
+      <Badge className="bg-yellow-500/10 text-yellow-500 hover:bg-yellow-500/20 border-yellow-500/20">
+        <Clock className="mr-1 size-3" />
+        Received
+      </Badge>
+    )
   }
+  if (s === "analyzing" || s === "validating" || s === "transforming" || s === "loading" || s === "running") {
+    return (
+      <Badge className="bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 border-blue-500/20">
+        <Loader2 className="mr-1 size-3 animate-spin" />
+        Processing
+      </Badge>
+    )
+  }
+  if (s === "complete" || s === "completed") {
+    return (
+      <Badge className="bg-green-500/10 text-green-500 hover:bg-green-500/20 border-green-500/20">
+        <CheckCircle className="mr-1 size-3" />
+        Complete
+      </Badge>
+    )
+  }
+  if (s === "failed") {
+    return (
+      <Badge className="bg-red-500/10 text-red-500 hover:bg-red-500/20 border-red-500/20">
+        <XCircle className="mr-1 size-3" />
+        Failed
+      </Badge>
+    )
+  }
+  return <Badge variant="outline">{status}</Badge>
 }
 
 function FileTypeIndicators() {
@@ -448,20 +450,23 @@ export default function BaseCampUploadPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
-                      {(job.status === "completed" ||
-                        job.status === "failed") && (
-                        <div className="text-right text-xs text-muted-foreground">
-                          <p>
-                            {job.records_processed.toLocaleString()} processed
-                          </p>
-                          {job.records_failed > 0 && (
-                            <p className="text-red-500">
-                              {job.records_failed.toLocaleString()} failed
-                            </p>
-                          )}
-                        </div>
-                      )}
-                      {getStatusBadge(job.status)}
+                      {(() => {
+                        const j = job as any
+                        const s = (j.state || j.status || "").toLowerCase()
+                        const processed = j.processed_records ?? j.records_processed ?? 0
+                        const failed = j.failed_records ?? j.records_failed ?? 0
+                        return (s === "complete" || s === "completed" || s === "failed") ? (
+                          <div className="text-right text-xs text-muted-foreground">
+                            <p>{processed.toLocaleString()} processed</p>
+                            {failed > 0 && (
+                              <p className="text-red-500">
+                                {failed.toLocaleString()} failed
+                              </p>
+                            )}
+                          </div>
+                        ) : null
+                      })()}
+                      {getStatusBadge((job as any).state || job.status)}
                     </div>
                   </div>
                 </Link>

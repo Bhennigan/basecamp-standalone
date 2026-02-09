@@ -17,7 +17,7 @@ def get_workspace_role(
     For standalone mode, we use a default workspace if not specified.
     """
     # In standalone mode, use default values if not provided
-    workspace_id = uuid.UUID(x_workspace_id) if x_workspace_id != "default" else uuid.UUID("00000000-0000-0000-0000-000000000001")
+    workspace_id = uuid.UUID(x_workspace_id) if x_workspace_id != "default" else uuid.UUID("00000000-0000-0000-0000-000000000000")
     
     user_id = None
     if x_user_id:

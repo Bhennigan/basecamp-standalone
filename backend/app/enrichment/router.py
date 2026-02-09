@@ -97,6 +97,7 @@ async def list_entities(
     return EntityListResponse(
         entities=[{
             "id": e.id,
+            "entity_type": e.entity_type,
             "type": e.entity_type,
             "value": e.value,
             "normalized_value": e.normalized_value,
@@ -104,6 +105,7 @@ async def list_entities(
             "threat_level": e.threat_level,
             "source": e.source,
             "tags": e.tags,
+            "entity_metadata": e.entity_metadata,
             "metadata": e.entity_metadata,
             "first_seen": e.first_seen.isoformat(),
             "last_seen": e.last_seen.isoformat(),

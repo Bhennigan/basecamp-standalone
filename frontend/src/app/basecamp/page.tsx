@@ -67,14 +67,20 @@ function JobStatusBadge({ status }: { status: string }) {
     { variant: "default" | "secondary" | "destructive" | "outline"; label: string }
   > = {
     pending: { variant: "outline", label: "Pending" },
+    received: { variant: "outline", label: "Received" },
     running: { variant: "secondary", label: "Running" },
+    analyzing: { variant: "secondary", label: "Analyzing" },
+    validating: { variant: "secondary", label: "Validating" },
+    transforming: { variant: "secondary", label: "Transforming" },
+    loading: { variant: "secondary", label: "Loading" },
+    complete: { variant: "default", label: "Completed" },
     completed: { variant: "default", label: "Completed" },
     failed: { variant: "destructive", label: "Failed" },
   }
 
-  const { variant, label } = variants[status] || {
+  const { variant, label } = variants[status?.toLowerCase()] || {
     variant: "outline" as const,
-    label: status,
+    label: status || "Unknown",
   }
 
   return <Badge variant={variant}>{label}</Badge>
@@ -113,7 +119,10 @@ export default function BaseCampPage() {
   }
 
   const activeJobs = jobs?.filter(
-    (job) => job.status === "running" || job.status === "pending"
+    (job: any) => {
+      const s = (job.state || job.status || "").toLowerCase()
+      return s !== "complete" && s !== "completed" && s !== "failed"
+    }
   ).length || 0
 
   const recentJobs = jobs?.slice(0, 5) || []
@@ -209,14 +218,14 @@ export default function BaseCampPage() {
                           Job {job.id.slice(0, 8)}...
                         </span>
                         <span className="text-xs text-muted-foreground">
-                          {job.records_processed} records processed
+                          {(job as any).processed_records ?? job.records_processed ?? 0} records processed
                         </span>
                       </div>
                       <div className="flex items-center gap-3">
                         <span className="text-xs text-muted-foreground">
                           {formatTimeAgo(job.created_at)}
                         </span>
-                        <JobStatusBadge status={job.status} />
+                        <JobStatusBadge status={(job as any).state || job.status} />
                       </div>
                     </div>
                   ))}

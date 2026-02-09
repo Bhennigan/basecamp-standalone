@@ -86,7 +86,7 @@ const initialFormData: SchemaFormData = {
 function getSchemaStatus(schema: BaseCampSchema): "DRAFT" | "ACTIVE" | "DEPRECATED" {
   // Determine status based on schema properties
   // For now, we'll use a simple heuristic based on fields
-  if (schema.fields.length === 0) {
+  if (!schema.fields || schema.fields.length === 0) {
     return "DRAFT"
   }
   // Check if schema has been updated recently (within last 30 days)
@@ -234,7 +234,7 @@ function SchemaDialog({
         setFormData({
           name: schema.name,
           description: schema.description || "",
-          fields: schema.fields.map((f) => ({
+          fields: (schema.fields || []).map((f) => ({
             name: f.name,
             type: f.type as FieldType,
             required: f.required,
@@ -422,7 +422,7 @@ function SchemaCard({
 
           <div className="flex items-center gap-2">
             <div className="flex flex-col items-end gap-1 text-xs text-muted-foreground">
-              <span>{schema.fields.length} fields</span>
+              <span>{(schema.fields || []).length} fields</span>
               <span>{formatDate(schema.created_at)}</span>
             </div>
 
@@ -450,7 +450,7 @@ function SchemaCard({
         </div>
       </CardHeader>
 
-      {isExpanded && schema.fields.length > 0 && (
+      {isExpanded && (schema.fields || []).length > 0 && (
         <CardContent className="pt-0">
           <div className="rounded-lg border border-border/50 bg-muted/20">
             <div className="grid grid-cols-3 gap-4 border-b border-border/50 px-4 py-2 text-xs font-medium text-muted-foreground">
@@ -459,7 +459,7 @@ function SchemaCard({
               <span>Required</span>
             </div>
             <div className="divide-y divide-border/50">
-              {schema.fields.map((field, index) => (
+              {(schema.fields || []).map((field, index) => (
                 <div
                   key={index}
                   className="grid grid-cols-3 gap-4 px-4 py-2 text-sm"

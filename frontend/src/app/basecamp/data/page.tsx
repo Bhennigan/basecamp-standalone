@@ -55,6 +55,7 @@ import { CenteredSpinner } from "@/components/loading/spinner"
 import { useToast } from "@/components/ui/use-toast"
 import {
   useBaseCampSchemas,
+  useBaseCampSchema,
   useBaseCampRecords,
   useBaseCampExport,
   type BaseCampRecord,
@@ -284,10 +285,8 @@ export default function BaseCampDataPage() {
   )
   const { downloadExport, exportPending } = useBaseCampExport()
 
-  // Get selected schema
-  const selectedSchema = useMemo(() => {
-    return schemas?.find((s) => s.id === selectedSchemaId)
-  }, [schemas, selectedSchemaId])
+  // Fetch full schema details (with fields) when one is selected
+  const { schema: selectedSchema } = useBaseCampSchema(selectedSchemaId)
 
   // Filter records based on search
   const filteredRecords = useMemo(() => {
@@ -311,7 +310,7 @@ export default function BaseCampDataPage() {
   const columns = useMemo<ColumnDef<BaseCampRecord>[]>(() => {
     if (!selectedSchema) return []
 
-    const fieldColumns: ColumnDef<BaseCampRecord>[] = selectedSchema.fields
+    const fieldColumns: ColumnDef<BaseCampRecord>[] = (selectedSchema.fields || [])
       .slice(0, 5) // Limit to first 5 fields for table display
       .map((field) => ({
         accessorKey: `data.${field.name}`,
