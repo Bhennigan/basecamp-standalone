@@ -1,11 +1,27 @@
 """FastAPI Router for OSINT Connector endpoints"""
+import logging
+import uuid
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from .base import ConnectorConfig, ConnectorResult
 from .manager import get_connector_manager, ConnectorManager
+from app.db.dependencies import get_db
+from app.db.models import (
+    BaseCampSchema as DBSchema,
+    DataRecord,
+    IngestionJob,
+    ExtractedEntity,
+)
+from app.basecamp.enums import IngestionState, SchemaStatus
+from app.enrichment.service import EnrichmentService
+from app.auth.credentials import get_workspace_role
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/connectors", tags=["connectors"])
 
@@ -279,3 +295,187 @@ async def stop_polling(manager: ConnectorManager = Depends(get_manager)):
     """
     await manager.stop_polling()
     return {"message": "Polling stopped"}
+
+
+class IngestRequest(BaseModel):
+    """Request model for connector ingest"""
+    query: Optional[str] = None
+
+
+@router.post("/{name}/ingest")
+async def ingest_from_connector(
+    name: str,
+    request: IngestRequest = IngestRequest(),
+    manager: ConnectorManager = Depends(get_manager),
+    workspace=Depends(get_workspace_role),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Fetch data from a connector and store it in the database.
+
+    Creates an ingestion job, stores all records, and extracts entities.
+    """
+    workspace_id = str(workspace.workspace_id)
+
+    connector = manager.get_connector(name)
+    if not connector:
+        raise HTTPException(status_code=404, detail=f"Connector not found: {name}")
+
+    # 1. Fetch data from connector
+    result = await connector.fetch(request.query)
+    if not result.success:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Connector fetch failed: {result.errors}",
+        )
+
+    if result.records_count == 0:
+        return {
+            "message": "No records returned from connector",
+            "connector": name,
+            "records_stored": 0,
+            "entities_extracted": 0,
+        }
+
+    # 2. Find or create a schema for this connector's data
+    schema_name = f"connector_{name}"
+    stmt = select(DBSchema).where(
+        DBSchema.workspace_id == workspace_id,
+        DBSchema.name == schema_name,
+    )
+    schema_result = await db.execute(stmt)
+    schema = schema_result.scalar_one_or_none()
+
+    if not schema:
+        schema = DBSchema(
+            workspace_id=workspace_id,
+            name=schema_name,
+            description=f"Auto-created schema for {name} connector data",
+            version=1,
+            status=SchemaStatus.ACTIVE,
+            fields=[],
+        )
+        db.add(schema)
+        await db.flush()
+        await db.refresh(schema)
+        logger.info(f"Created schema for connector {name} | schema_id={schema.id}")
+
+    # 3. Create an ingestion job
+    job = IngestionJob(
+        workspace_id=workspace_id,
+        schema_id=schema.id,
+        state=IngestionState.LOADING,
+        file_name=f"{name}_connector_fetch",
+        total_records=result.records_count,
+        processed_records=0,
+        failed_records=0,
+        job_metadata={"connector": name, "query": request.query},
+    )
+    db.add(job)
+    await db.flush()
+    await db.refresh(job)
+
+    # 4. Store records and extract entities
+    records_stored = 0
+    entities_extracted = 0
+    failed = 0
+
+    # Load existing entities for upsert
+    existing_stmt = select(ExtractedEntity).where(
+        ExtractedEntity.workspace_id == workspace_id
+    )
+    existing_result = await db.execute(existing_stmt)
+    existing_map: dict[str, ExtractedEntity] = {
+        f"{e.entity_type}:{e.normalized_value}": e
+        for e in existing_result.scalars().all()
+    }
+
+    for record_data in result.data:
+        try:
+            # Store as DataRecord
+            record = DataRecord(
+                workspace_id=workspace_id,
+                schema_id=schema.id,
+                ingestion_job_id=job.id,
+                job_id=job.id,
+                data=record_data,
+            )
+            db.add(record)
+            records_stored += 1
+
+            # Extract entities from this record
+            try:
+                entities = EnrichmentService.extract_entities(record_data, name)
+                deduplicated = EnrichmentService.deduplicate_entities(entities)
+                for entity in deduplicated:
+                    enriched = EnrichmentService.enrich_entity(entity)
+                    key = f"{enriched.type}:{enriched.normalized_value}"
+                    existing = existing_map.get(key)
+                    if existing:
+                        existing.last_seen = datetime.utcnow()
+                        existing.confidence = max(
+                            existing.confidence, enriched.confidence
+                        )
+                        if enriched.threat_level:
+                            existing.threat_level = enriched.threat_level
+                        existing.tags = list(
+                            set((existing.tags or []) + enriched.tags)
+                        )
+                        existing.entity_metadata = {
+                            **(existing.entity_metadata or {}),
+                            **enriched.metadata,
+                        }
+                    else:
+                        db_entity = ExtractedEntity(
+                            workspace_id=workspace_id,
+                            entity_type=enriched.type,
+                            value=enriched.value,
+                            normalized_value=enriched.normalized_value,
+                            confidence=enriched.confidence,
+                            threat_level=enriched.threat_level,
+                            source=name,
+                            tags=enriched.tags,
+                            entity_metadata=enriched.metadata,
+                        )
+                        db.add(db_entity)
+                        existing_map[key] = db_entity
+                    entities_extracted += 1
+            except Exception as ent_err:
+                logger.warning(
+                    f"Entity extraction failed for record: {ent_err}"
+                )
+
+            # Flush in batches of 500
+            if records_stored % 500 == 0:
+                await db.flush()
+
+        except Exception as rec_err:
+            logger.warning(f"Failed to store record: {rec_err}")
+            failed += 1
+
+    # Final flush
+    await db.flush()
+
+    # 5. Update job status
+    job.state = IngestionState.COMPLETE
+    job.processed_records = records_stored
+    job.failed_records = failed
+    job.completed_at = datetime.utcnow()
+    await db.flush()
+
+    await db.commit()
+
+    logger.info(
+        f"Connector ingest complete | connector={name} "
+        f"records={records_stored} entities={entities_extracted} failed={failed}"
+    )
+
+    return {
+        "message": "Connector data ingested successfully",
+        "connector": name,
+        "job_id": job.id,
+        "schema_id": schema.id,
+        "records_stored": records_stored,
+        "entities_extracted": entities_extracted,
+        "failed": failed,
+    }
