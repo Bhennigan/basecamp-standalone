@@ -105,6 +105,14 @@ async def lifespan(app: FastAPI):
                 config={"brand": netcraft_brand},
             ))
             logger.info(f"Netcraft connector auto-registered | brand={netcraft_brand}")
+            # Auto-connect so status is 'active' immediately
+            try:
+                connector = manager.get_connector("netcraft")
+                if connector:
+                    await connector.connect()
+                    logger.info("Netcraft connector connected on startup")
+            except Exception as ce:
+                logger.warning(f"Netcraft auto-connect failed (will retry on first use): {ce}")
     except Exception as e:
         logger.warning(f"Connector auto-registration failed: {e}")
 

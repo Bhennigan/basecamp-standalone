@@ -49,13 +49,15 @@ function ConnectorCard({
   onDelete,
   testPending,
 }: {
-  connector: { name: string; type: string; status: string; health?: string }
+  connector: { name: string; type: string; status: string; health?: string; enabled?: boolean }
   onTest: () => void
   onDelete: () => void
   testPending: boolean
 }) {
   const info = CONNECTOR_TYPES.find((t) => t.value === connector.type)
-  const isHealthy = connector.health === "healthy" || connector.status === "active" || connector.status === "connected"
+  const s = (connector.status || "").toLowerCase()
+  const h = (connector.health || "").toLowerCase()
+  const isHealthy = h === "healthy" || s === "active" || s === "connected" || s === "online" || connector.enabled === true
 
   return (
     <Card className="border-border/50">
