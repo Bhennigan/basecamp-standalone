@@ -363,7 +363,7 @@ export default function BaseCampUploadPage() {
                     <p className="font-mono text-sm">{selectedFile.jobId}</p>
                   </div>
                   <Link
-                    href={`/workspaces/${workspaceId}/basecamp/jobs/${selectedFile.jobId}`}
+                    href={`/basecamp/jobs/${selectedFile.jobId}`}
                   >
                     <Button variant="outline" size="sm">
                       View job
@@ -434,7 +434,7 @@ export default function BaseCampUploadPage() {
               {recentJobs.map((job) => (
                 <Link
                   key={job.id}
-                  href={`/workspaces/${workspaceId}/basecamp/jobs/${job.id}`}
+                  href={`/basecamp/jobs/${job.id}`}
                   className="block"
                 >
                   <div className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors">

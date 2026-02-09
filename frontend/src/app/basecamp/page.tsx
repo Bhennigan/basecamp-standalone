@@ -112,7 +112,7 @@ export default function BaseCampPage() {
 
   const recentJobs = jobs?.slice(0, 5) || []
 
-  const basePath = `/workspaces/${workspaceId}/basecamp`
+  const basePath = `/basecamp`
 
   return (
     <div className="size-full overflow-auto">

@@ -11,13 +11,11 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { label: 'Dashboard', href: '/', icon: 'home' },
-  { label: 'Data Sources', href: '/sources', icon: 'database' },
-  { label: 'Pipelines', href: '/pipelines', icon: 'git-branch' },
-  { label: 'Analytics', href: '/analytics', icon: 'bar-chart' },
-  { label: 'Alerts', href: '/alerts', icon: 'bell' },
-  { label: 'Models', href: '/models', icon: 'cpu' },
-  { label: 'Settings', href: '/settings', icon: 'settings' },
+  { label: 'Dashboard', href: '/basecamp', icon: 'home' },
+  { label: 'Upload', href: '/basecamp/upload', icon: 'upload' },
+  { label: 'Schemas', href: '/basecamp/schemas', icon: 'database' },
+  { label: 'Data Browser', href: '/basecamp/data', icon: 'bar-chart' },
+  { label: 'Sources', href: '/basecamp/sources', icon: 'settings' },
 ]
 
 function HomeIcon() {
@@ -77,14 +75,20 @@ function SettingsIcon() {
   )
 }
 
+function UploadIcon() {
+  return (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+    </svg>
+  )
+}
+
 function getIcon(iconName: string) {
   switch(iconName) {
     case 'home': return <HomeIcon />
     case 'database': return <DatabaseIcon />
-    case 'git-branch': return <PipelineIcon />
+    case 'upload': return <UploadIcon />
     case 'bar-chart': return <ChartIcon />
-    case 'bell': return <BellIcon />
-    case 'cpu': return <CpuIcon />
     case 'settings': return <SettingsIcon />
     default: return <HomeIcon />
   }
@@ -129,7 +133,9 @@ export function Sidebar() {
 
       <nav className="flex-1 p-4 space-y-1">
         {navItems.map((item) => {
-          const isActive = pathname === item.href
+          const isActive = item.href === '/basecamp'
+            ? pathname === '/basecamp'
+            : pathname.startsWith(item.href)
           return (
             <Link
               key={item.href}
