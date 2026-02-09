@@ -16,9 +16,16 @@ from app.connectors.router import router as connectors_router
 from app.events.router import router as events_router
 from app.compliance.router import router as compliance_router
 from app.review.router import router as review_router
+from app.storage.router_minio import router as minio_router
 from app.compliance.middleware import AuditMiddleware
 from app.db.database import engine
 from app.db.models import Base
+
+# Service clients
+from app.storage.minio_client import get_minio_client
+from app.events.nats_client import NATSClient, get_nats_client
+from app.vectors.qdrant_client import VectorClient
+from app.graph.neo4j_client import Neo4jClient, close_neo4j_client
 
 # Observability imports
 from app.observability import (
@@ -33,16 +40,71 @@ from app.observability import (
 setup_logging(level="INFO")
 logger = get_logger(__name__)
 
+# Module-level references for graceful shutdown
+_nats_client: NATSClient | None = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create database tables on startup."""
+    """Initialize all services on startup, shut down on exit."""
+    global _nats_client
+
     logger.info("Starting Base Camp OS")
+
+    # --- Database ---
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created successfully")
+
+    # --- MinIO ---
+    try:
+        minio = get_minio_client()
+        await minio.ensure_buckets()
+        logger.info("MinIO buckets ensured (raw, enriched, reports, audit)")
+    except Exception as e:
+        logger.warning("MinIO initialization failed — file storage unavailable", error=str(e))
+
+    # --- NATS ---
+    try:
+        _nats_client = NATSClient()
+        await _nats_client.connect()
+        logger.info("NATS connected, JetStream stream ensured")
+    except Exception as e:
+        _nats_client = None
+        logger.warning("NATS initialization failed — event publishing unavailable", error=str(e))
+
+    # --- Qdrant ---
+    try:
+        qdrant = VectorClient()
+        await qdrant.ensure_collection()
+        logger.info("Qdrant collection ensured (entities)")
+    except Exception as e:
+        logger.warning("Qdrant initialization failed — vector search unavailable", error=str(e))
+
+    # --- Neo4j ---
+    try:
+        neo4j = Neo4jClient()
+        await neo4j.connect()
+        logger.info("Neo4j connected")
+    except Exception as e:
+        logger.warning("Neo4j initialization failed — graph operations unavailable", error=str(e))
+
+    logger.info("Base Camp OS startup complete")
     yield
+
+    # --- Shutdown ---
     logger.info("Shutting down Base Camp OS")
+    if _nats_client and _nats_client.is_connected:
+        try:
+            await _nats_client.disconnect()
+            logger.info("NATS disconnected")
+        except Exception as e:
+            logger.warning("Error disconnecting NATS", error=str(e))
+    try:
+        await close_neo4j_client()
+        logger.info("Neo4j disconnected")
+    except Exception as e:
+        logger.warning("Error disconnecting Neo4j", error=str(e))
 
 
 app = FastAPI(
@@ -102,6 +164,9 @@ app.include_router(events_router, prefix="/api/events", tags=["Events"])
 
 # Human-in-the-loop Review router
 app.include_router(review_router, prefix="/api/review", tags=["Review Queue"])
+
+# MinIO storage router
+app.include_router(minio_router, prefix="/api/storage", tags=["Object Storage"])
 
 # Compliance and audit router
 app.include_router(compliance_router, tags=["Compliance"])

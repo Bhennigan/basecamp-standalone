@@ -16,6 +16,10 @@ const navItems: NavItem[] = [
   { label: 'Schemas', href: '/basecamp/schemas', icon: 'database' },
   { label: 'Data Browser', href: '/basecamp/data', icon: 'bar-chart' },
   { label: 'Sources', href: '/basecamp/sources', icon: 'settings' },
+  { label: 'Entities', href: '/basecamp/entities', icon: 'shield' },
+  { label: 'Graph', href: '/basecamp/graph', icon: 'git-branch' },
+  { label: 'Connectors', href: '/basecamp/connectors', icon: 'plug' },
+  { label: 'Review', href: '/basecamp/review', icon: 'check-circle' },
 ]
 
 function HomeIcon() {
@@ -83,6 +87,38 @@ function UploadIcon() {
   )
 }
 
+function ShieldIcon() {
+  return (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+    </svg>
+  )
+}
+
+function GitBranchIcon() {
+  return (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 3v12m0 0a3 3 0 103 3H15a3 3 0 100-3m-9 0h9m-9 0a3 3 0 01-3-3V6a3 3 0 013-3h0" />
+    </svg>
+  )
+}
+
+function PlugIcon() {
+  return (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+    </svg>
+  )
+}
+
+function CheckCircleIcon() {
+  return (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  )
+}
+
 function getIcon(iconName: string) {
   switch(iconName) {
     case 'home': return <HomeIcon />
@@ -90,6 +126,10 @@ function getIcon(iconName: string) {
     case 'upload': return <UploadIcon />
     case 'bar-chart': return <ChartIcon />
     case 'settings': return <SettingsIcon />
+    case 'shield': return <ShieldIcon />
+    case 'git-branch': return <GitBranchIcon />
+    case 'plug': return <PlugIcon />
+    case 'check-circle': return <CheckCircleIcon />
     default: return <HomeIcon />
   }
 }

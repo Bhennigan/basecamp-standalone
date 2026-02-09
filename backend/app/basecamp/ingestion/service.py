@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as json_lib
 import uuid
 from datetime import UTC, datetime
 
@@ -21,9 +22,20 @@ from app.basecamp.schemas import (
     IngestionUploadResponse,
 )
 from app.basecamp.types import ParseResult
-from app.db.models import DataRecord, DataSource, IngestionJob
+from app.db.models import DataRecord, DataSource, ExtractedEntity, IngestionJob
 from app.exceptions import TracecatNotFoundError, TracecatValidationError
 from app.service import BaseWorkspaceService
+
+# Service imports for pipeline integrations
+from app.enrichment.service import EnrichmentService
+from app.enrichment.entities import Entity
+from app.storage.minio_client import get_minio_client
+from app.vectors.qdrant_client import VectorClient
+from app.vectors.embeddings import EmbeddingGenerator
+from app.graph.neo4j_client import Neo4jClient, get_neo4j_client
+from app.graph.exporter import GraphExporter
+from app.events.publisher import EventPublisher, get_event_publisher
+from app.review.service import ReviewService
 
 
 class IngestionService(BaseWorkspaceService):
@@ -299,12 +311,24 @@ class IngestionService(BaseWorkspaceService):
         )
 
     async def _process_file(self, job: IngestionJob, content: bytes) -> None:
-        """Process an uploaded file.
+        """Process an uploaded file through the full pipeline.
 
-        Args:
-            job: The ingestion job.
-            content: The file content.
+        Pipeline stages:
+        1. Parse file content
+        2. Store raw file in MinIO
+        3. Infer/validate schema
+        4. Store DataRecords in PostgreSQL
+        5. Extract & enrich entities
+        6. Index vectors in Qdrant
+        7. Export entities to Neo4j graph
+        8. Publish events via NATS
+        9. Queue low-confidence items for review
+
+        Each integration is wrapped in try/except so a single service failure
+        does not break the pipeline.
         """
+        all_entities: list[Entity] = []
+
         try:
             # Update state to analyzing
             job.state = IngestionState.ANALYZING
@@ -323,9 +347,16 @@ class IngestionService(BaseWorkspaceService):
                 )
                 job.completed_at = datetime.now(UTC)
                 await self.session.flush()
+                # Publish failure event
+                await self._publish_event_safe(
+                    "failed", job=job, error_message=job.error_message
+                )
                 return
 
             job.total_records = parse_result.total_rows
+
+            # ── Step 2: Store raw file in MinIO ──────────────────────────
+            await self._store_raw_file(job, content)
 
             # Update state to validating
             job.state = IngestionState.VALIDATING
@@ -357,6 +388,7 @@ class IngestionService(BaseWorkspaceService):
             # Create data records
             processed = 0
             failed = 0
+            created_records: list[DataRecord] = []
 
             for parsed_record in parse_result.records:
                 try:
@@ -367,6 +399,7 @@ class IngestionService(BaseWorkspaceService):
                         data=parsed_record.data,
                     )
                     self.session.add(record)
+                    created_records.append(record)
                     processed += 1
                 except Exception as e:
                     self.logger.warning(
@@ -377,6 +410,20 @@ class IngestionService(BaseWorkspaceService):
                     failed += 1
 
             await self.session.flush()
+
+            # ── Step 5: Entity extraction & enrichment ───────────────────
+            all_entities = await self._extract_and_store_entities(
+                created_records, job
+            )
+
+            # ── Step 6: Vector indexing in Qdrant ────────────────────────
+            await self._index_vectors(all_entities)
+
+            # ── Step 7: Export to Neo4j graph ────────────────────────────
+            await self._export_to_graph(all_entities)
+
+            # ── Step 9: Queue low-confidence entities for review ─────────
+            await self._queue_for_review(all_entities, job)
 
             # Update job status
             job.state = IngestionState.COMPLETE
@@ -390,7 +437,11 @@ class IngestionService(BaseWorkspaceService):
                 job_id=str(job.id),
                 processed=processed,
                 failed=failed,
+                entities_extracted=len(all_entities),
             )
+
+            # ── Step 8: Publish success event via NATS ───────────────────
+            await self._publish_event_safe("complete", job=job, record_count=processed)
 
         except Exception as e:
             self.logger.error("Ingestion failed", job_id=str(job.id), error=str(e))
@@ -398,6 +449,248 @@ class IngestionService(BaseWorkspaceService):
             job.error_message = str(e)
             job.completed_at = datetime.now(UTC)
             await self.session.flush()
+            await self._publish_event_safe(
+                "failed", job=job, error_message=str(e)
+            )
+
+    # ── Pipeline integration helpers ─────────────────────────────────────
+
+    async def _store_raw_file(self, job: IngestionJob, content: bytes) -> None:
+        """Upload the original file to MinIO raw bucket."""
+        try:
+            minio = get_minio_client()
+            object_name = f"{self.workspace_id}/{job.id}/{job.file_name}"
+            content_type = "application/octet-stream"
+            if job.file_name:
+                if job.file_name.endswith(".csv"):
+                    content_type = "text/csv"
+                elif job.file_name.endswith(".json") or job.file_name.endswith(".jsonl"):
+                    content_type = "application/json"
+                elif job.file_name.endswith(".xlsx"):
+                    content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            minio.upload_bytes("raw", object_name, content, content_type=content_type)
+            self.logger.info(
+                "Stored raw file in MinIO",
+                bucket="raw",
+                object_name=object_name,
+            )
+        except Exception as e:
+            self.logger.warning("MinIO upload failed — continuing without raw storage", error=str(e))
+
+    async def _extract_and_store_entities(
+        self, records: list[DataRecord], job: IngestionJob
+    ) -> list[Entity]:
+        """Extract entities from records, enrich, deduplicate, and store."""
+        all_entities: list[Entity] = []
+        try:
+            raw_entities: list[Entity] = []
+            source_label = f"ingestion:{job.file_name}"
+
+            for record in records:
+                try:
+                    extracted = EnrichmentService.extract_entities(
+                        record.data, source_label
+                    )
+                    for entity in extracted:
+                        entity.source_record_id = record.id
+                    raw_entities.extend(extracted)
+                except Exception as e:
+                    self.logger.warning(
+                        "Entity extraction failed for record",
+                        record_id=str(record.id),
+                        error=str(e),
+                    )
+
+            # Deduplicate
+            deduplicated = EnrichmentService.deduplicate_entities(raw_entities)
+
+            # Enrich each entity
+            for entity in deduplicated:
+                entity = EnrichmentService.enrich_entity(entity)
+
+            # Store in PostgreSQL
+            for entity in deduplicated:
+                try:
+                    db_entity = ExtractedEntity(
+                        id=entity.id,
+                        workspace_id=self.workspace_id,
+                        entity_type=entity.type,
+                        value=entity.value,
+                        normalized_value=entity.normalized_value,
+                        confidence=entity.confidence,
+                        threat_level=entity.threat_level,
+                        source=entity.source,
+                        source_record_id=entity.source_record_id,
+                        tags=entity.tags,
+                        entity_metadata=entity.metadata,
+                        first_seen=entity.first_seen,
+                        last_seen=entity.last_seen,
+                    )
+                    self.session.add(db_entity)
+                    all_entities.append(entity)
+                except Exception as e:
+                    self.logger.warning(
+                        "Failed to store entity",
+                        entity_value=entity.value,
+                        error=str(e),
+                    )
+
+            await self.session.flush()
+            self.logger.info(
+                "Entities extracted and stored",
+                raw_count=len(raw_entities),
+                deduplicated_count=len(deduplicated),
+                stored_count=len(all_entities),
+            )
+        except Exception as e:
+            self.logger.warning("Entity enrichment pipeline failed", error=str(e))
+
+        return all_entities
+
+    async def _index_vectors(self, entities: list[Entity]) -> None:
+        """Generate embeddings and upsert to Qdrant."""
+        if not entities:
+            return
+        try:
+            qdrant = VectorClient()
+            embedder = EmbeddingGenerator()
+
+            for entity in entities:
+                try:
+                    text = embedder.entity_to_text({
+                        "type": entity.type,
+                        "value": entity.value,
+                        "tags": entity.tags,
+                        "metadata": entity.metadata,
+                    })
+                    vector = embedder.generate(text)
+                    payload = {
+                        "entity_type": entity.type,
+                        "value": entity.value,
+                        "normalized_value": entity.normalized_value,
+                        "threat_level": entity.threat_level,
+                        "confidence": entity.confidence,
+                        "workspace_id": self.workspace_id,
+                        "tags": entity.tags,
+                    }
+                    await qdrant.upsert_entity(entity.id, vector, payload)
+                except Exception as e:
+                    self.logger.warning(
+                        "Vector indexing failed for entity",
+                        entity_id=entity.id,
+                        error=str(e),
+                    )
+
+            self.logger.info("Vector indexing complete", count=len(entities))
+        except Exception as e:
+            self.logger.warning("Qdrant vector indexing failed", error=str(e))
+
+    async def _export_to_graph(self, entities: list[Entity]) -> None:
+        """Push entities and relationships to Neo4j."""
+        if not entities:
+            return
+        try:
+            neo4j = await get_neo4j_client()
+            exporter = GraphExporter(neo4j)
+
+            for entity in entities:
+                try:
+                    node_data = {
+                        "id": entity.id,
+                        "entity_type": entity.type,
+                        "value": entity.value,
+                        "normalized_value": entity.normalized_value,
+                        "confidence": entity.confidence,
+                        "threat_level": entity.threat_level,
+                        "source": entity.source,
+                        "workspace_id": self.workspace_id,
+                        "tags": entity.tags,
+                        "metadata": entity.metadata,
+                    }
+                    await neo4j.create_entity_node(node_data)
+                except Exception as e:
+                    self.logger.warning(
+                        "Graph export failed for entity",
+                        entity_id=entity.id,
+                        error=str(e),
+                    )
+
+            # Build relationships between entities from the same source record
+            record_groups: dict[str, list[Entity]] = {}
+            for entity in entities:
+                if entity.source_record_id:
+                    record_groups.setdefault(entity.source_record_id, []).append(entity)
+            for record_id, group in record_groups.items():
+                if len(group) > 1:
+                    for i, a in enumerate(group[:-1]):
+                        for b in group[i + 1:]:
+                            try:
+                                await neo4j.create_relationship(
+                                    source_id=a.id,
+                                    target_id=b.id,
+                                    relationship_type="ASSOCIATED_WITH",
+                                    properties={"reason": "same_source_record", "source_record_id": record_id},
+                                )
+                            except Exception:
+                                pass
+
+            self.logger.info("Graph export complete", count=len(entities))
+        except Exception as e:
+            self.logger.warning("Neo4j graph export failed", error=str(e))
+
+    async def _queue_for_review(
+        self, entities: list[Entity], job: IngestionJob
+    ) -> None:
+        """Queue low-confidence entities for human review."""
+        if not entities:
+            return
+        try:
+            review_count = 0
+            for entity in entities:
+                if entity.confidence < 0.7:
+                    await ReviewService.queue_for_review(
+                        db=self.session,
+                        workspace_id=self.workspace_id,
+                        entity_id=entity.id,
+                        item_type=entity.type,
+                        confidence_score=entity.confidence,
+                        data={
+                            "value": entity.value,
+                            "threat_level": entity.threat_level,
+                            "source": entity.source,
+                            "tags": entity.tags,
+                        },
+                        reason=f"Low confidence ({entity.confidence:.2f}) during ingestion of {job.file_name}",
+                    )
+                    review_count += 1
+            if review_count:
+                await self.session.flush()
+                self.logger.info("Queued entities for review", count=review_count)
+        except Exception as e:
+            self.logger.warning("Review queue submission failed", error=str(e))
+
+    async def _publish_event_safe(self, event_type: str, **kwargs) -> None:
+        """Publish an ingestion event via NATS (best-effort)."""
+        try:
+            publisher = await get_event_publisher()
+            job: IngestionJob = kwargs.get("job")
+            if event_type == "complete":
+                await publisher.ingestion_complete(
+                    file_id=str(job.id),
+                    file_name=job.file_name or "",
+                    record_count=kwargs.get("record_count", 0),
+                    schema_id=str(job.schema_id) if job.schema_id else None,
+                    correlation_id=str(job.id),
+                )
+            elif event_type == "failed":
+                await publisher.ingestion_failed(
+                    file_name=job.file_name or "",
+                    error_message=kwargs.get("error_message", "Unknown error"),
+                    error_type="ingestion_error",
+                    correlation_id=str(job.id),
+                )
+        except Exception as e:
+            self.logger.warning("NATS event publishing failed", error=str(e))
 
     def _detect_format(self, filename: str) -> FileFormat:
         """Detect file format from filename.

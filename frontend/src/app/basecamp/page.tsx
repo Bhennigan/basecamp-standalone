@@ -2,10 +2,12 @@
 
 import {
   Activity,
+  CheckCircle,
   Database,
   FileUp,
   Layers,
   RefreshCw,
+  Shield,
   Upload,
 } from "lucide-react"
 import Link from "next/link"
@@ -25,6 +27,8 @@ import {
   useBaseCampRecords,
   useBaseCampSchemas,
   useBaseCampSources,
+  useBaseCampEntities,
+  useBaseCampReviewQueue,
 } from "@/hooks/use-basecamp"
 import { useWorkspaceId } from "@/providers/workspace-id"
 
@@ -98,6 +102,8 @@ export default function BaseCampPage() {
   const { schemas, schemasLoading } = useBaseCampSchemas()
   const { records, recordsLoading } = useBaseCampRecords()
   const { jobs, jobsLoading, refetchJobs } = useBaseCampJobs()
+  const { entities, entitiesLoading } = useBaseCampEntities({ limit: 1000 })
+  const { reviewStats, statsLoading } = useBaseCampReviewQueue()
 
   const isLoading =
     sourcesLoading || schemasLoading || recordsLoading || jobsLoading
@@ -137,7 +143,7 @@ export default function BaseCampPage() {
         </div>
 
         {/* Metrics Grid */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <MetricCard
             title="Total Sources"
             value={sources?.length || 0}
@@ -161,6 +167,18 @@ export default function BaseCampPage() {
             value={activeJobs}
             icon={Activity}
             description="Running ingestion jobs"
+          />
+          <MetricCard
+            title="Entities"
+            value={entities?.length || 0}
+            icon={Shield}
+            description="Extracted entities"
+          />
+          <MetricCard
+            title="Review Queue"
+            value={reviewStats?.pending || 0}
+            icon={CheckCircle}
+            description="Pending review items"
           />
         </div>
 
@@ -292,6 +310,38 @@ export default function BaseCampPage() {
               <CardContent className="flex items-center gap-3 p-4">
                 <Database className="size-5 text-muted-foreground" />
                 <span className="font-medium">Sources</span>
+              </CardContent>
+            </Card>
+          </Link>
+          <Link href={`${basePath}/entities`}>
+            <Card className="cursor-pointer border-border/50 bg-card transition-colors hover:bg-muted/50">
+              <CardContent className="flex items-center gap-3 p-4">
+                <Shield className="size-5 text-muted-foreground" />
+                <span className="font-medium">Entities</span>
+              </CardContent>
+            </Card>
+          </Link>
+          <Link href={`${basePath}/graph`}>
+            <Card className="cursor-pointer border-border/50 bg-card transition-colors hover:bg-muted/50">
+              <CardContent className="flex items-center gap-3 p-4">
+                <Activity className="size-5 text-muted-foreground" />
+                <span className="font-medium">Graph</span>
+              </CardContent>
+            </Card>
+          </Link>
+          <Link href={`${basePath}/connectors`}>
+            <Card className="cursor-pointer border-border/50 bg-card transition-colors hover:bg-muted/50">
+              <CardContent className="flex items-center gap-3 p-4">
+                <Database className="size-5 text-muted-foreground" />
+                <span className="font-medium">Connectors</span>
+              </CardContent>
+            </Card>
+          </Link>
+          <Link href={`${basePath}/review`}>
+            <Card className="cursor-pointer border-border/50 bg-card transition-colors hover:bg-muted/50">
+              <CardContent className="flex items-center gap-3 p-4">
+                <CheckCircle className="size-5 text-muted-foreground" />
+                <span className="font-medium">Review</span>
               </CardContent>
             </Card>
           </Link>
