@@ -441,9 +441,9 @@ export default function BaseCampUploadPage() {
                 >
                   <div className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors">
                     <div className="flex items-center gap-3">
-                      <File className="size-4 text-muted-foreground" />
+                      {job.file_name ? getFileIcon(job.file_name) : <File className="size-4 text-muted-foreground" />}
                       <div>
-                        <p className="font-mono text-sm">{job.id}</p>
+                        <p className="text-sm font-medium">{job.file_name || job.id}</p>
                         <p className="text-xs text-muted-foreground">
                           {new Date(job.created_at).toLocaleString()}
                         </p>
@@ -451,22 +451,19 @@ export default function BaseCampUploadPage() {
                     </div>
                     <div className="flex items-center gap-4">
                       {(() => {
-                        const j = job as any
-                        const s = (j.state || j.status || "").toLowerCase()
-                        const processed = j.processed_records ?? j.records_processed ?? 0
-                        const failed = j.failed_records ?? j.records_failed ?? 0
-                        return (s === "complete" || s === "completed" || s === "failed") ? (
+                        const s = (job.state || "").toLowerCase()
+                        return (s === "complete" || s === "failed") ? (
                           <div className="text-right text-xs text-muted-foreground">
-                            <p>{processed.toLocaleString()} processed</p>
-                            {failed > 0 && (
+                            <p>{job.processed_records.toLocaleString()} processed</p>
+                            {job.failed_records > 0 && (
                               <p className="text-red-500">
-                                {failed.toLocaleString()} failed
+                                {job.failed_records.toLocaleString()} failed
                               </p>
                             )}
                           </div>
                         ) : null
                       })()}
-                      {getStatusBadge((job as any).state || job.status)}
+                      {getStatusBadge(job.state)}
                     </div>
                   </div>
                 </Link>

@@ -16,10 +16,8 @@ const navItems: NavItem[] = [
   { label: 'Schemas', href: '/basecamp/schemas', icon: 'database' },
   { label: 'Data Browser', href: '/basecamp/data', icon: 'bar-chart' },
   { label: 'Sources', href: '/basecamp/sources', icon: 'settings' },
-  { label: 'Entities', href: '/basecamp/entities', icon: 'shield' },
-  { label: 'Graph', href: '/basecamp/graph', icon: 'git-branch' },
-  { label: 'Connectors', href: '/basecamp/connectors', icon: 'plug' },
-  { label: 'Review', href: '/basecamp/review', icon: 'check-circle' },
+  { label: 'Mappings', href: '/basecamp/mappings', icon: 'git-branch' },
+  { label: 'Consumers', href: '/basecamp/consumers', icon: 'plug' },
 ]
 
 function HomeIcon() {

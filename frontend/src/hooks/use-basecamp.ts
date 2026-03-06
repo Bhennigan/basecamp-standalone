@@ -33,14 +33,18 @@ export interface BaseCampDataSourceUpdate {
 // Ingestion Job types
 export interface BaseCampIngestionJob {
   id: string
-  source_id: string
-  status: "pending" | "running" | "completed" | "failed"
-  progress: number
-  records_processed: number
-  records_failed: number
-  error_message?: string
-  started_at?: string
-  completed_at?: string
+  source_id: string | null
+  schema_id: string | null
+  state: "received" | "analyzing" | "validating" | "transforming" | "loading" | "complete" | "failed" | "quarantined"
+  status?: string // legacy alias
+  file_name: string | null
+  file_format: string | null
+  total_records: number | null
+  processed_records: number
+  failed_records: number
+  error_message?: string | null
+  started_at?: string | null
+  completed_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -111,8 +115,7 @@ export interface BaseCampExportRequest {
 
 export interface BaseCampUploadResponse {
   job_id: string
-  filename: string
-  records_count: number
+  message: string
 }
 
 /* ── DATA SOURCES ─────────────────────────────────────────────────────────── */
@@ -270,13 +273,16 @@ export function useBaseCampJobs() {
     },
     enabled: !!workspaceId,
     refetchInterval: (query) => {
-      // Poll every 3 seconds if there are running jobs
+      // Poll every 3 seconds if there are active jobs
       const data = query.state.data
       if (!data) return false
-      const hasRunningJobs = data.some(
-        (job) => job.status === "pending" || job.status === "running"
+      const hasActiveJobs = data.some(
+        (job) => {
+          const s = (job.state || job.status || "").toLowerCase()
+          return s === "received" || s === "analyzing" || s === "validating" || s === "transforming" || s === "loading"
+        }
       )
-      return hasRunningJobs ? 3000 : false
+      return hasActiveJobs ? 3000 : false
     },
   })
 
@@ -306,10 +312,11 @@ export function useBaseCampJob(jobId: string) {
     },
     enabled: !!workspaceId && !!jobId,
     refetchInterval: (query) => {
-      // Poll every 2 seconds if job is still running
+      // Poll every 2 seconds if job is still active
       const data = query.state.data
       if (!data) return false
-      return data.status === "pending" || data.status === "running" ? 2000 : false
+      const s = (data.state || data.status || "").toLowerCase()
+      return s === "received" || s === "analyzing" || s === "validating" || s === "transforming" || s === "loading" ? 2000 : false
     },
   })
 
@@ -634,333 +641,47 @@ export function useBaseCampExport() {
   }
 }
 
-/* ── ENTITIES (Enrichment) ─────────────────────────────────────────────────── */
+/* ── MAPPING PROFILES ──────────────────────────────────────────────────────── */
 
-export interface BaseCampEntity {
+export interface FieldMapping {
+  source_field: string
+  target_field: string
+  transform: string
+  params: Record<string, unknown>
+}
+
+export interface MappingProfile {
   id: string
-  entity_type: string
-  value: string
-  normalized_value: string
-  confidence: number
-  threat_level: string | null
-  source: string
-  source_record_id: string | null
-  tags: string[]
-  entity_metadata: Record<string, unknown>
-  first_seen: string
-  last_seen: string
-}
-
-export interface BaseCampEntitySearchResult {
-  id: string | number
-  score: number
-  payload: Record<string, unknown>
-}
-
-export function useBaseCampEntities(params?: {
-  entity_type?: string
-  threat_level?: string
-  limit?: number
-  offset?: number
-}) {
-  const workspaceId = useWorkspaceId()
-
-  const {
-    data: entities,
-    isLoading: entitiesLoading,
-    error: entitiesError,
-    refetch: refetchEntities,
-  } = useQuery<BaseCampEntity[]>({
-    queryKey: ["basecamp", "entities", workspaceId, params],
-    queryFn: async () => {
-      const response = await client.get("/api/enrichment/entities", {
-        params: { workspace_id: workspaceId, ...params },
-      })
-      return response.data?.entities ?? response.data
-    },
-    enabled: !!workspaceId,
-  })
-
-  return { entities, entitiesLoading, entitiesError, refetchEntities }
-}
-
-/* ── ENTITY SEARCH (Vectors) ───────────────────────────────────────────────── */
-
-export function useBaseCampEntitySearch() {
-  const workspaceId = useWorkspaceId()
-
-  const {
-    mutateAsync: searchEntities,
-    data: searchResults,
-    isPending: searchPending,
-    error: searchError,
-  } = useMutation<
-    BaseCampEntitySearchResult[],
-    Error,
-    { query: string; entity_type?: string; limit?: number }
-  >({
-    mutationFn: async (params) => {
-      const response = await client.post("/api/vectors/search", params, {
-        params: { workspace_id: workspaceId },
-      })
-      return response.data?.results ?? response.data
-    },
-  })
-
-  return { searchEntities, searchResults, searchPending, searchError }
-}
-
-/* ── GRAPH ─────────────────────────────────────────────────────────────────── */
-
-export interface BaseCampGraphRelationship {
-  source_id: string
-  source_type: string
-  relationship_type: string
-  target_id: string
-  target_type: string
-}
-
-export interface BaseCampGraphNeighbor {
-  id: string
-  labels: string[]
-  properties: Record<string, unknown>
-}
-
-export function useBaseCampGraph(entityId?: string) {
-  const workspaceId = useWorkspaceId()
-
-  const {
-    data: relationships,
-    isLoading: relationshipsLoading,
-    error: relationshipsError,
-    refetch: refetchRelationships,
-  } = useQuery<BaseCampGraphRelationship[]>({
-    queryKey: ["basecamp", "graph", "relationships", workspaceId, entityId],
-    queryFn: async () => {
-      const response = await client.get(`/api/graph/entity/${entityId}`, {
-        params: { workspace_id: workspaceId },
-      })
-      return response.data?.relationships ?? response.data
-    },
-    enabled: !!workspaceId && !!entityId,
-  })
-
-  const {
-    data: neighbors,
-    isLoading: neighborsLoading,
-    refetch: refetchNeighbors,
-  } = useQuery<BaseCampGraphNeighbor[]>({
-    queryKey: ["basecamp", "graph", "neighbors", workspaceId, entityId],
-    queryFn: async () => {
-      const response = await client.get(`/api/graph/neighbors/${entityId}`, {
-        params: { workspace_id: workspaceId },
-      })
-      return response.data
-    },
-    enabled: !!workspaceId && !!entityId,
-  })
-
-  return {
-    relationships,
-    relationshipsLoading,
-    relationshipsError,
-    neighbors,
-    neighborsLoading,
-    refetchRelationships,
-    refetchNeighbors,
-  }
-}
-
-export function useBaseCampGraphStats() {
-  const workspaceId = useWorkspaceId()
-
-  const {
-    data: graphStats,
-    isLoading: graphStatsLoading,
-    refetch: refetchGraphStats,
-  } = useQuery<Record<string, unknown>>({
-    queryKey: ["basecamp", "graph", "stats", workspaceId],
-    queryFn: async () => {
-      const response = await client.get("/api/graph/stats", {
-        params: { workspace_id: workspaceId },
-      })
-      return response.data
-    },
-    enabled: !!workspaceId,
-  })
-
-  return { graphStats, graphStatsLoading, refetchGraphStats }
-}
-
-/* ── CONNECTORS ────────────────────────────────────────────────────────────── */
-
-export interface BaseCampConnector {
   name: string
-  type: string
-  description?: string
-  status: string
-  health?: string
-  config?: Record<string, unknown>
-  last_fetch?: string
-}
-
-export function useBaseCampConnectors() {
-  const workspaceId = useWorkspaceId()
-  const queryClient = useQueryClient()
-
-  const {
-    data: connectors,
-    isLoading: connectorsLoading,
-    error: connectorsError,
-    refetch: refetchConnectors,
-  } = useQuery<BaseCampConnector[]>({
-    queryKey: ["basecamp", "connectors", workspaceId],
-    queryFn: async () => {
-      const response = await client.get("/api/connectors", {
-        params: { workspace_id: workspaceId },
-      })
-      return response.data
-    },
-    enabled: !!workspaceId,
-  })
-
-  const { mutateAsync: createConnector, isPending: createConnectorPending } =
-    useMutation<
-      BaseCampConnector,
-      Error,
-      { name: string; type: string; config?: Record<string, unknown> }
-    >({
-      mutationFn: async (data) => {
-        const response = await client.post("/api/connectors", data, {
-          params: { workspace_id: workspaceId },
-        })
-        return response.data
-      },
-      onSuccess: () => {
-        queryClient.invalidateQueries({
-          queryKey: ["basecamp", "connectors", workspaceId],
-        })
-      },
-    })
-
-  const { mutateAsync: deleteConnector, isPending: deleteConnectorPending } =
-    useMutation<void, Error, string>({
-      mutationFn: async (name) => {
-        await client.delete(`/api/connectors/${name}`, {
-          params: { workspace_id: workspaceId },
-        })
-      },
-      onSuccess: () => {
-        queryClient.invalidateQueries({
-          queryKey: ["basecamp", "connectors", workspaceId],
-        })
-      },
-    })
-
-  const { mutateAsync: testConnector, isPending: testConnectorPending } =
-    useMutation<Record<string, unknown>, Error, { name: string; query?: string }>({
-      mutationFn: async ({ name, query }) => {
-        const response = await client.post(
-          `/api/connectors/${name}/test`,
-          { query: query || "test" },
-          { params: { workspace_id: workspaceId } }
-        )
-        return response.data
-      },
-    })
-
-  const { mutateAsync: fetchFromConnector, isPending: fetchPending } =
-    useMutation<Record<string, unknown>, Error, { name: string; query: string }>({
-      mutationFn: async ({ name, query }) => {
-        const response = await client.post(
-          `/api/connectors/${name}/fetch`,
-          { query },
-          { params: { workspace_id: workspaceId } }
-        )
-        return response.data
-      },
-    })
-
-  return {
-    connectors,
-    connectorsLoading,
-    connectorsError,
-    refetchConnectors,
-    createConnector,
-    createConnectorPending,
-    deleteConnector,
-    deleteConnectorPending,
-    testConnector,
-    testConnectorPending,
-    fetchFromConnector,
-    fetchPending,
-  }
-}
-
-/* ── REVIEW QUEUE ──────────────────────────────────────────────────────────── */
-
-export interface BaseCampReviewItem {
-  id: string
-  workspace_id: string
-  entity_id: string | null
-  record_id: string | null
-  item_type: string
-  status: "pending" | "in_review" | "approved" | "rejected" | "reclassified"
-  priority: "critical" | "high" | "medium" | "low"
-  confidence_score: number
-  confidence_threshold: number
-  reason: string | null
-  data: Record<string, unknown>
-  assigned_to: string | null
-  reviewed_by: string | null
-  review_notes: string | null
+  description: string | null
+  target_schema_id: string
+  mappings: FieldMapping[]
+  drop_unmapped: boolean
   created_at: string
   updated_at: string
-  reviewed_at: string | null
 }
 
-export interface BaseCampReviewStats {
-  pending: number
-  in_review: number
-  approved: number
-  rejected: number
-  reclassified: number
-  total: number
+export interface MappingProfileCreate {
+  name: string
+  description: string | null
+  target_schema_id: string
+  mappings: FieldMapping[]
+  drop_unmapped: boolean
 }
 
-export function useBaseCampReviewQueue(params?: {
-  status?: string
-  priority?: string
-  limit?: number
-  offset?: number
-}) {
+export function useBaseCampMappings() {
   const workspaceId = useWorkspaceId()
   const queryClient = useQueryClient()
 
   const {
-    data: reviewData,
-    isLoading: reviewLoading,
-    error: reviewError,
-    refetch: refetchReview,
-  } = useQuery<{ items: BaseCampReviewItem[]; count: number }>({
-    queryKey: ["basecamp", "review", "queue", workspaceId, params],
+    data: mappings,
+    isLoading: mappingsLoading,
+    error: mappingsError,
+    refetch: refetchMappings,
+  } = useQuery<MappingProfile[]>({
+    queryKey: ["basecamp", "mappings", workspaceId],
     queryFn: async () => {
-      const response = await client.get("/api/review/queue", {
-        params: { workspace_id: workspaceId, ...params },
-      })
-      return response.data
-    },
-    enabled: !!workspaceId,
-  })
-
-  const {
-    data: reviewStats,
-    isLoading: statsLoading,
-    refetch: refetchStats,
-  } = useQuery<BaseCampReviewStats>({
-    queryKey: ["basecamp", "review", "stats", workspaceId],
-    queryFn: async () => {
-      const response = await client.get("/api/review/stats", {
+      const response = await client.get("/api/basecamp/transform/profiles", {
         params: { workspace_id: workspaceId },
       })
       return response.data
@@ -968,87 +689,83 @@ export function useBaseCampReviewQueue(params?: {
     enabled: !!workspaceId,
   })
 
-  const { mutateAsync: assignItem, isPending: assignPending } = useMutation<
-    BaseCampReviewItem,
-    Error,
-    { itemId: string; assignee: string }
-  >({
-    mutationFn: async ({ itemId, assignee }) => {
-      const response = await client.post(
-        `/api/review/item/${itemId}/assign`,
-        { assignee },
-        { params: { workspace_id: workspaceId } }
-      )
-      return response.data
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["basecamp", "review", workspaceId],
-      })
-    },
-  })
-
-  const { mutateAsync: submitDecision, isPending: decisionPending } =
-    useMutation<
-      unknown,
-      Error,
-      {
-        itemId: string
-        decision: string
-        reviewer_id: string
-        notes?: string
-      }
-    >({
-      mutationFn: async ({ itemId, decision, reviewer_id, notes }) => {
-        const response = await client.post(
-          `/api/review/item/${itemId}/decision`,
-          { decision, reviewer_id, notes },
-          { params: { workspace_id: workspaceId } }
-        )
+  const { mutateAsync: createMapping, isPending: createMappingPending } =
+    useMutation<MappingProfile, Error, MappingProfileCreate>({
+      mutationFn: async (data) => {
+        const response = await client.post("/api/basecamp/transform/profiles", data, {
+          params: { workspace_id: workspaceId },
+        })
         return response.data
       },
       onSuccess: () => {
         queryClient.invalidateQueries({
-          queryKey: ["basecamp", "review", workspaceId],
+          queryKey: ["basecamp", "mappings", workspaceId],
+        })
+      },
+    })
+
+  const { mutateAsync: deleteMapping, isPending: deleteMappingPending } =
+    useMutation<void, Error, string>({
+      mutationFn: async (id) => {
+        await client.delete(`/api/basecamp/transform/profiles/${id}`, {
+          params: { workspace_id: workspaceId },
+        })
+      },
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["basecamp", "mappings", workspaceId],
         })
       },
     })
 
   return {
-    reviewItems: reviewData?.items ?? [],
-    reviewCount: reviewData?.count ?? 0,
-    reviewLoading,
-    reviewError,
-    refetchReview,
-    reviewStats,
-    statsLoading,
-    refetchStats,
-    assignItem,
-    assignPending,
-    submitDecision,
-    decisionPending,
+    mappings,
+    mappingsLoading,
+    mappingsError,
+    refetchMappings,
+    createMapping,
+    createMappingPending,
+    deleteMapping,
+    deleteMappingPending,
   }
 }
 
-/* ── EVENTS ────────────────────────────────────────────────────────────────── */
+/* ── CONSUMERS ─────────────────────────────────────────────────────────────── */
 
-export interface BaseCampEventSubject {
-  pattern: string
-  description: string
-  example_event: string
+export interface Consumer {
+  id: string
+  name: string
+  description: string | null
+  callback_url: string | null
+  schema_ids: string[]
+  mapping_profile_id: string | null
+  active: boolean
+  api_key: string
+  last_poll: string | null
+  created_at: string
+  updated_at: string
 }
 
-export function useBaseCampEvents() {
+export interface ConsumerCreate {
+  name: string
+  description: string | null
+  callback_url: string | null
+  mapping_profile_id: string | null
+}
+
+export function useBaseCampConsumers() {
   const workspaceId = useWorkspaceId()
+  const queryClient = useQueryClient()
 
   const {
-    data: subjects,
-    isLoading: subjectsLoading,
-    error: subjectsError,
-  } = useQuery<BaseCampEventSubject[]>({
-    queryKey: ["basecamp", "events", "subjects", workspaceId],
+    data: consumers,
+    isLoading: consumersLoading,
+    error: consumersError,
+    refetch: refetchConsumers,
+  } = useQuery<Consumer[]>({
+    queryKey: ["basecamp", "consumers", workspaceId],
     queryFn: async () => {
-      const response = await client.get("/api/events/subjects", {
+      const response = await client.get("/api/basecamp/consumers", {
         params: { workspace_id: workspaceId },
       })
       return response.data
@@ -1056,20 +773,43 @@ export function useBaseCampEvents() {
     enabled: !!workspaceId,
   })
 
-  const {
-    data: eventHealth,
-    isLoading: healthLoading,
-  } = useQuery<Record<string, unknown>>({
-    queryKey: ["basecamp", "events", "health", workspaceId],
-    queryFn: async () => {
-      const response = await client.get("/api/events/health", {
-        params: { workspace_id: workspaceId },
-      })
-      return response.data
-    },
-    enabled: !!workspaceId,
-    refetchInterval: 30000,
-  })
+  const { mutateAsync: createConsumer, isPending: createConsumerPending } =
+    useMutation<Consumer, Error, ConsumerCreate>({
+      mutationFn: async (data) => {
+        const response = await client.post("/api/basecamp/consumers", data, {
+          params: { workspace_id: workspaceId },
+        })
+        return response.data
+      },
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["basecamp", "consumers", workspaceId],
+        })
+      },
+    })
 
-  return { subjects, subjectsLoading, subjectsError, eventHealth, healthLoading }
+  const { mutateAsync: deleteConsumer, isPending: deleteConsumerPending } =
+    useMutation<void, Error, string>({
+      mutationFn: async (id) => {
+        await client.delete(`/api/basecamp/consumers/${id}`, {
+          params: { workspace_id: workspaceId },
+        })
+      },
+      onSuccess: () => {
+        queryClient.invalidateQueries({
+          queryKey: ["basecamp", "consumers", workspaceId],
+        })
+      },
+    })
+
+  return {
+    consumers,
+    consumersLoading,
+    consumersError,
+    refetchConsumers,
+    createConsumer,
+    createConsumerPending,
+    deleteConsumer,
+    deleteConsumerPending,
+  }
 }
