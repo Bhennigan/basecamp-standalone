@@ -1,7 +1,7 @@
 """Netcraft Connector for takedown intelligence and brand protection"""
 import logging
 import httpx
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 from .base import BaseConnector, ConnectorConfig, ConnectorResult, ConnectorStatus
@@ -13,14 +13,16 @@ class NetcraftConnector(BaseConnector):
     """
     Connector for Netcraft Takedown / Threat Intelligence API.
 
-    Provides access to:
-    - Takedown operations (phishing, malware, brand abuse)
-    - Attack reports and threat intelligence
-    - Submission of new attacks for takedown
-    - Brand-specific monitoring via configured brand name
+    Netcraft exposes two APIs:
+    - Takedown API (takedown.netcraft.com/api/v1) — attacks, takedowns, notes
+    - Submission API (report.netcraft.com/api/v3) — report URLs/emails/files
+
+    This connector primarily uses the Takedown API to pull attack and
+    takedown intelligence.  The ``api_url`` config can override if needed.
     """
 
     CONNECTOR_TYPE = "netcraft"
+    # Takedown API is the correct base for pulling attack/takedown data
     DEFAULT_API_URL = "https://takedown.netcraft.com/api/v1"
 
     def __init__(self, config: ConnectorConfig):
@@ -47,23 +49,27 @@ class NetcraftConnector(BaseConnector):
                 timeout=30.0,
             )
 
-            # Verify credentials by listing takedowns
+            # Verify credentials by listing attacks (small page)
             response = await self._client.get(
-                "/attacks", params={"count": 1}
+                "/attacks/", params={"count": 1}
             )
             if response.status_code == 200:
                 logger.info(
-                    f"Netcraft connected successfully | brand={self.brand}"
+                    f"Netcraft connected successfully | brand={self.brand} | url={self.api_url}"
                 )
                 self.status = ConnectorStatus.ACTIVE
                 return True
-            elif response.status_code == 401 or response.status_code == 403:
-                logger.error("Netcraft authentication failed")
+            elif response.status_code in (401, 403):
+                body = response.text[:500]
+                logger.error(
+                    f"Netcraft authentication failed | status={response.status_code} | body={body}"
+                )
                 self.status = ConnectorStatus.ERROR
                 return False
             else:
+                body = response.text[:500]
                 logger.error(
-                    f"Netcraft connection error: {response.status_code}"
+                    f"Netcraft connection error | status={response.status_code} | body={body}"
                 )
                 self.status = ConnectorStatus.ERROR
                 return False
@@ -143,37 +149,80 @@ class NetcraftConnector(BaseConnector):
             errors=errors,
         )
 
+    def _extract_items(self, result: Any, *keys: str) -> List[Dict[str, Any]]:
+        """Extract items from a Netcraft API response.
+
+        Handles multiple response shapes:
+        - Direct list: [...]
+        - Wrapped: {"attacks": [...]} or {"results": [...]} or {"data": [...]}
+        """
+        if isinstance(result, list):
+            return result
+
+        if isinstance(result, dict):
+            for key in keys:
+                if key in result and isinstance(result[key], list):
+                    return result[key]
+            # Try common wrapper keys
+            for fallback in ("results", "data", "items"):
+                if fallback in result and isinstance(result[fallback], list):
+                    return result[fallback]
+
+        logger.warning(
+            f"Netcraft response has unexpected shape | type={type(result).__name__} "
+            f"keys={list(result.keys()) if isinstance(result, dict) else 'N/A'}"
+        )
+        return []
+
     async def _fetch_attacks(self) -> List[Dict[str, Any]]:
-        """Fetch recent attacks/threats reported against our brand"""
+        """Fetch recent attacks/threats reported against our brand.
+
+        Uses the Takedown API v1 endpoint: GET /attacks/
+        """
         attacks = []
         params: Dict[str, Any] = {"count": 100}
         if self.brand:
             params["brand"] = self.brand
 
-        response = await self._client.get("/attacks", params=params)
+        response = await self._client.get("/attacks/", params=params)
         if response.status_code == 200:
             result = response.json()
-            for attack in result if isinstance(result, list) else result.get("attacks", result.get("results", [])):
+            raw_items = self._extract_items(result, "attacks")
+            logger.info(f"Netcraft attacks fetched | raw_count={len(raw_items)}")
+            for attack in raw_items:
                 attacks.append(self._normalize_attack(attack))
         else:
-            logger.warning(f"Netcraft attacks endpoint returned {response.status_code}")
+            body = response.text[:500]
+            logger.warning(
+                f"Netcraft attacks endpoint returned {response.status_code} | body={body}"
+            )
 
         return attacks
 
     async def _fetch_takedowns(self) -> List[Dict[str, Any]]:
-        """Fetch active takedown requests"""
+        """Fetch active takedown requests.
+
+        The Takedown API v1 uses the same /attacks/ endpoint with status
+        filters, or a dedicated /attacks/ query.  Takedowns are attacks
+        that have been authorized for removal.
+        """
         takedowns = []
-        params: Dict[str, Any] = {"count": 100}
+        params: Dict[str, Any] = {"count": 100, "status": "active"}
         if self.brand:
             params["brand"] = self.brand
 
-        response = await self._client.get("/takedowns", params=params)
+        response = await self._client.get("/attacks/", params=params)
         if response.status_code == 200:
             result = response.json()
-            for td in result if isinstance(result, list) else result.get("takedowns", result.get("results", [])):
+            raw_items = self._extract_items(result, "attacks", "takedowns")
+            logger.info(f"Netcraft takedowns fetched | raw_count={len(raw_items)}")
+            for td in raw_items:
                 takedowns.append(self._normalize_takedown(td))
         else:
-            logger.warning(f"Netcraft takedowns endpoint returned {response.status_code}")
+            body = response.text[:500]
+            logger.warning(
+                f"Netcraft takedowns endpoint returned {response.status_code} | body={body}"
+            )
 
         return takedowns
 
@@ -192,18 +241,25 @@ class NetcraftConnector(BaseConnector):
         if self.brand:
             params["brand"] = self.brand
 
-        response = await self._client.get("/attacks", params=params)
+        response = await self._client.get("/attacks/", params=params)
         if response.status_code == 200:
             result = response.json()
-            for attack in result if isinstance(result, list) else result.get("attacks", result.get("results", [])):
+            raw_items = self._extract_items(result, "attacks")
+            logger.info(f"Netcraft attack search results | count={len(raw_items)}")
+            for attack in raw_items:
                 attacks.append(self._normalize_attack(attack))
+        else:
+            body = response.text[:500]
+            logger.warning(
+                f"Netcraft attack search failed | status={response.status_code} | body={body}"
+            )
 
         return attacks
 
     async def submit_attack(
         self, attack_url: str, comment: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Submit a new URL for takedown"""
+        """Submit a new URL for takedown via the report endpoint."""
         if not self._client:
             await self.connect()
 
@@ -213,7 +269,7 @@ class NetcraftConnector(BaseConnector):
         if comment:
             payload["comment"] = comment
 
-        response = await self._client.post("/attacks", json=payload)
+        response = await self._client.post("/report/", json=payload)
         if response.status_code in (200, 201, 202):
             return {
                 "success": True,
@@ -237,16 +293,22 @@ class NetcraftConnector(BaseConnector):
                 }
 
             response = await self._client.get(
-                "/attacks", params={"count": 1}
+                "/attacks/", params={"count": 1}
             )
 
-            return {
+            result = {
                 "healthy": response.status_code == 200,
                 "status": self.status.value,
+                "api_url": self.api_url,
                 "api_status": response.status_code,
                 "brand": self.brand,
                 "last_run": self.last_run.isoformat() if self.last_run else None,
             }
+
+            if response.status_code != 200:
+                result["error_body"] = response.text[:200]
+
+            return result
 
         except Exception as e:
             return {"healthy": False, "status": "error", "message": str(e)}

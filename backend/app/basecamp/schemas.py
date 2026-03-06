@@ -172,7 +172,9 @@ class IngestionJobReadMinimal(Schema):
     state: IngestionState
     file_name: str | None
     processed_records: int
+    failed_records: int
     created_at: datetime
+    updated_at: datetime
 
 
 class IngestionUploadResponse(Schema):

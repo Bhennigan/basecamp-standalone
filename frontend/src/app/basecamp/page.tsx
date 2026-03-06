@@ -2,12 +2,12 @@
 
 import {
   Activity,
-  CheckCircle,
   Database,
   FileUp,
+  GitBranch,
   Layers,
+  Plug,
   RefreshCw,
-  Shield,
   Upload,
 } from "lucide-react"
 import Link from "next/link"
@@ -27,8 +27,8 @@ import {
   useBaseCampRecords,
   useBaseCampSchemas,
   useBaseCampSources,
-  useBaseCampEntities,
-  useBaseCampReviewQueue,
+  useBaseCampMappings,
+  useBaseCampConsumers,
 } from "@/hooks/use-basecamp"
 import { useWorkspaceId } from "@/providers/workspace-id"
 
@@ -108,8 +108,8 @@ export default function BaseCampPage() {
   const { schemas, schemasLoading } = useBaseCampSchemas()
   const { records, recordsLoading } = useBaseCampRecords()
   const { jobs, jobsLoading, refetchJobs } = useBaseCampJobs()
-  const { entities, entitiesLoading } = useBaseCampEntities({ limit: 1000 })
-  const { reviewStats, statsLoading } = useBaseCampReviewQueue()
+  const { mappings, mappingsLoading } = useBaseCampMappings()
+  const { consumers, consumersLoading } = useBaseCampConsumers()
 
   const isLoading =
     sourcesLoading || schemasLoading || recordsLoading || jobsLoading
@@ -178,16 +178,16 @@ export default function BaseCampPage() {
             description="Running ingestion jobs"
           />
           <MetricCard
-            title="Entities"
-            value={entities?.length || 0}
-            icon={Shield}
-            description="Extracted entities"
+            title="Mappings"
+            value={mappings?.length || 0}
+            icon={GitBranch}
+            description="Transform profiles"
           />
           <MetricCard
-            title="Review Queue"
-            value={reviewStats?.pending || 0}
-            icon={CheckCircle}
-            description="Pending review items"
+            title="Consumers"
+            value={consumers?.length || 0}
+            icon={Plug}
+            description="Registered consumers"
           />
         </div>
 
@@ -289,7 +289,7 @@ export default function BaseCampPage() {
         </div>
 
         {/* Navigation Links */}
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
           <Link href={`${basePath}/upload`}>
             <Card className="cursor-pointer border-border/50 bg-card transition-colors hover:bg-muted/50">
               <CardContent className="flex items-center gap-3 p-4">
@@ -322,35 +322,19 @@ export default function BaseCampPage() {
               </CardContent>
             </Card>
           </Link>
-          <Link href={`${basePath}/entities`}>
+          <Link href={`${basePath}/mappings`}>
             <Card className="cursor-pointer border-border/50 bg-card transition-colors hover:bg-muted/50">
               <CardContent className="flex items-center gap-3 p-4">
-                <Shield className="size-5 text-muted-foreground" />
-                <span className="font-medium">Entities</span>
+                <GitBranch className="size-5 text-muted-foreground" />
+                <span className="font-medium">Mappings</span>
               </CardContent>
             </Card>
           </Link>
-          <Link href={`${basePath}/graph`}>
+          <Link href={`${basePath}/consumers`}>
             <Card className="cursor-pointer border-border/50 bg-card transition-colors hover:bg-muted/50">
               <CardContent className="flex items-center gap-3 p-4">
-                <Activity className="size-5 text-muted-foreground" />
-                <span className="font-medium">Graph</span>
-              </CardContent>
-            </Card>
-          </Link>
-          <Link href={`${basePath}/connectors`}>
-            <Card className="cursor-pointer border-border/50 bg-card transition-colors hover:bg-muted/50">
-              <CardContent className="flex items-center gap-3 p-4">
-                <Database className="size-5 text-muted-foreground" />
-                <span className="font-medium">Connectors</span>
-              </CardContent>
-            </Card>
-          </Link>
-          <Link href={`${basePath}/review`}>
-            <Card className="cursor-pointer border-border/50 bg-card transition-colors hover:bg-muted/50">
-              <CardContent className="flex items-center gap-3 p-4">
-                <CheckCircle className="size-5 text-muted-foreground" />
-                <span className="font-medium">Review</span>
+                <Plug className="size-5 text-muted-foreground" />
+                <span className="font-medium">Consumers</span>
               </CardContent>
             </Card>
           </Link>

@@ -98,25 +98,37 @@ class DataRecord(Base):
     ingestion_job: Mapped[Optional["IngestionJob"]] = relationship(back_populates="data_records")
 
 
-# Entity Enrichment Models
+# Transformation & Consumer Models
 
-class ExtractedEntity(Base):
-    """Extracted and enriched entities for OSINT/DP3"""
-    __tablename__ = "extracted_entity"
-    __table_args__ = (
-        UniqueConstraint("workspace_id", "entity_type", "normalized_value", name="uq_entity_workspace_type_value"),
-    )
+class MappingProfile(Base):
+    """Transformation mapping profile for normalizing data between schemas."""
+    __tablename__ = "mapping_profile"
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
     workspace_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
-    entity_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    value: Mapped[str] = mapped_column(Text, nullable=False)
-    normalized_value: Mapped[str] = mapped_column(Text, nullable=False, index=True)
-    confidence: Mapped[float] = mapped_column(Float, default=1.0)
-    threat_level: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
-    source: Mapped[str] = mapped_column(String(255), nullable=False)
-    source_record_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
-    tags: Mapped[list] = mapped_column(JSONB, default=list)
-    entity_metadata: Mapped[dict] = mapped_column(JSONB, default=dict)
-    first_seen: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    last_seen: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_schema_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
+    target_schema_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    mappings: Mapped[list] = mapped_column(JSONB, default=list)
+    drop_unmapped: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Consumer(Base):
+    """Registered downstream consumer/subscriber."""
+    __tablename__ = "consumer"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    callback_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    schema_ids: Mapped[list] = mapped_column(JSONB, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    api_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    mapping_profile_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("mapping_profile.id"), nullable=True)
+    last_poll: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
