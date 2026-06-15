@@ -75,7 +75,7 @@ class GraphExporter:
             "workspace_id": entity.workspace_id,
             "source_record_id": entity.source_record_id,
             "tags": entity.tags or [],
-            "metadata": entity.metadata or {},
+            "metadata": entity.entity_metadata or {},
             "first_seen": entity.first_seen.isoformat() if entity.first_seen else None,
             "last_seen": entity.last_seen.isoformat() if entity.last_seen else None,
         }

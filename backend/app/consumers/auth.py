@@ -1,6 +1,7 @@
 """API key authentication for external consumers."""
 from __future__ import annotations
 
+import hashlib
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException
@@ -9,6 +10,11 @@ from starlette.status import HTTP_401_UNAUTHORIZED, HTTP_403_FORBIDDEN
 
 from app.db.dependencies import AsyncDBSession
 from app.db.models import Consumer
+
+
+def sha256hex(raw: str) -> str:
+    """Hash a raw API key for storage/lookup. Never store the raw key."""
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 async def get_consumer_from_api_key(
@@ -33,7 +39,7 @@ async def get_consumer_from_api_key(
             detail="Invalid API key format",
         )
 
-    stmt = select(Consumer).where(Consumer.api_key == api_key)
+    stmt = select(Consumer).where(Consumer.api_key_hash == sha256hex(api_key))
     result = await session.execute(stmt)
     consumer = result.scalar_one_or_none()
 

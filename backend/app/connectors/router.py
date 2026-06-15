@@ -17,8 +17,10 @@ from app.db.models import (
     IngestionJob,
     ExtractedEntity,
 )
+from app.compliance.models import DataLineage
 from app.basecamp.enums import IngestionState, SchemaStatus
 from app.enrichment.service import EnrichmentService
+from app.quality.scoring import score_record
 from app.auth.credentials import get_workspace_role
 
 logger = logging.getLogger(__name__)
@@ -390,8 +392,16 @@ async def ingest_from_connector(
         for e in existing_result.scalars().all()
     }
 
+    # Schema fields for quality scoring (connector schemas often start empty).
+    schema_fields = schema.fields if isinstance(schema.fields, list) else []
+
     for record_data in result.data:
         try:
+            record_metadata = {
+                "source_type": "connector",
+                "connector": name,
+                "job_id": str(job.id),
+            }
             # Store as DataRecord
             record = DataRecord(
                 workspace_id=workspace_id,
@@ -399,8 +409,29 @@ async def ingest_from_connector(
                 ingestion_job_id=job.id,
                 job_id=job.id,
                 data=record_data,
+                record_metadata=record_metadata,
+                quality=(
+                    score_record(
+                        record_data, schema_fields, now=datetime.utcnow()
+                    )
+                    if schema_fields
+                    else {}
+                ),
             )
             db.add(record)
+
+            # Durable lineage row in the SAME transaction (committed below).
+            db.add(
+                DataLineage(
+                    workspace_id=workspace_id,
+                    record_id=str(record.id),
+                    source_type="connector",
+                    source_id=str(job.id),
+                    transformation=None,
+                    parent_record_id=None,
+                    lineage_metadata=record_metadata,
+                )
+            )
             records_stored += 1
 
             # Extract entities from this record

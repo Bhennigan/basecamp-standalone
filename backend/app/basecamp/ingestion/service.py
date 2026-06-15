@@ -21,8 +21,10 @@ from app.basecamp.schemas import (
     IngestionUploadResponse,
 )
 from app.basecamp.types import ParseResult
-from app.db.models import DataRecord, DataSource, IngestionJob
+from app.compliance.models import DataLineage
+from app.db.models import BaseCampSchema, DataRecord, DataSource, IngestionJob
 from app.exceptions import TracecatNotFoundError, TracecatValidationError
+from app.quality.scoring import score_record
 from app.service import BaseWorkspaceService
 
 
@@ -266,6 +268,13 @@ class IngestionService(BaseWorkspaceService):
             # Apply mapping profile if one exists for this target schema
             mappings = await self._get_mapping_for_schema(schema_id) if schema_id else None
 
+            # Load schema fields once per batch for quality scoring.
+            schema_fields = await self._get_schema_fields(schema_id)
+            # Names of the transforms applied when a mapping profile runs.
+            transform_names = (
+                [m.target_field for m in mappings] if mappings else []
+            )
+
             job.state = IngestionState.LOADING
             await self.session.flush()
 
@@ -282,14 +291,53 @@ class IngestionService(BaseWorkspaceService):
                             record_data, mappings, drop_unmapped=False
                         )
 
+                    record_metadata = {
+                        "source_type": "file_ingestion",
+                        "file_name": job.file_name,
+                        "file_format": str(job.file_format),
+                        "row_number": parsed_record.row_number,
+                        "source_sheet": parsed_record.source_sheet,
+                        "job_id": str(job.id),
+                        "transformations": transform_names,
+                    }
+
                     record = DataRecord(
                         workspace_id=self.workspace_id,
                         schema_id=schema_id,
                         ingestion_job_id=job.id,
                         job_id=job.id,
                         data=record_data,
+                        record_metadata=record_metadata,
+                        quality=(
+                            score_record(
+                                record_data,
+                                schema_fields,
+                                now=datetime.utcnow(),
+                            )
+                            if schema_fields
+                            else {}
+                        ),
                     )
                     self.session.add(record)
+
+                    # Durable lineage row in the SAME transaction (no commit).
+                    # record.id is set by the model's Python-side UUID default,
+                    # so it is available without a per-record flush.
+                    self.session.add(
+                        DataLineage(
+                            workspace_id=str(self.workspace_id),
+                            record_id=str(record.id),
+                            source_type="file_ingestion",
+                            source_id=str(job.id),
+                            transformation=(
+                                ",".join(transform_names)[:100]
+                                if transform_names
+                                else None
+                            ),
+                            parent_record_id=None,
+                            lineage_metadata=record_metadata,
+                        )
+                    )
                     processed += 1
                 except Exception as e:
                     self.logger.warning(
@@ -353,6 +401,26 @@ class IngestionService(BaseWorkspaceService):
             job.error_message = str(e)
             job.completed_at = datetime.utcnow()
             await self.session.flush()
+
+    async def _get_schema_fields(self, schema_id) -> list:
+        """Load the field definitions for a schema (once per batch).
+
+        Returns the raw ``BaseCampSchema.fields`` list, or ``[]`` if the schema
+        can't be resolved (so quality scoring degrades gracefully).
+        """
+        if not schema_id:
+            return []
+        stmt = select(BaseCampSchema).where(
+            and_(
+                BaseCampSchema.workspace_id == self.workspace_id,
+                BaseCampSchema.id == schema_id,
+            )
+        )
+        result = await self.session.execute(stmt)
+        schema = result.scalar_one_or_none()
+        if schema and isinstance(schema.fields, list):
+            return schema.fields
+        return []
 
     async def _get_mapping_for_schema(self, schema_id: str) -> list | None:
         """Find a mapping profile that targets this schema."""

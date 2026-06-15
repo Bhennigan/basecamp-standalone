@@ -167,7 +167,7 @@ class EnrichmentService:
             source=entity.source,
             source_record_id=entity.source_record_id,
             tags=entity.tags,
-            metadata=entity.metadata,
+            entity_metadata=entity.metadata,
             first_seen=entity.first_seen,
             last_seen=entity.last_seen,
         )

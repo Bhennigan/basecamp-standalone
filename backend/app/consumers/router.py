@@ -5,14 +5,17 @@ import secrets
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, tuple_
 from starlette.status import HTTP_201_CREATED, HTTP_204_NO_CONTENT, HTTP_404_NOT_FOUND
 
 from app.auth.credentials import WorkspaceUserDep
+from app.consumers.auth import sha256hex
+from app.consumers.external_router import encode_cursor, decode_cursor
 from app.db.dependencies import AsyncDBSession
 from app.db.models import Consumer as ConsumerModel, DataRecord, BaseCampSchema
 from app.consumers.models import (
     ConsumerCreate,
+    ConsumerCreated,
     ConsumerRead,
     ConsumerUpdate,
     ChangeFeedResponse,
@@ -32,7 +35,7 @@ def _model_to_read(c: ConsumerModel) -> ConsumerRead:
         schema_ids=c.schema_ids or [],
         mapping_profile_id=c.mapping_profile_id,
         active=c.active,
-        api_key=c.api_key,
+        api_key_prefix=c.api_key_prefix,
         last_poll=c.last_poll.isoformat() if c.last_poll else None,
         created_at=c.created_at.isoformat() if c.created_at else "",
         updated_at=c.updated_at.isoformat() if c.updated_at else "",
@@ -61,8 +64,9 @@ async def create_consumer(
     role: WorkspaceUserDep,
     session: AsyncDBSession,
     data: ConsumerCreate,
-) -> ConsumerRead:
-    """Register a new consumer. Returns an API key for the change feed."""
+) -> ConsumerCreated:
+    """Register a new consumer. Returns the raw API key ONCE — never re-shown."""
+    raw = f"bc_{secrets.token_urlsafe(32)}"
     consumer = ConsumerModel(
         workspace_id=str(role.workspace_id),
         name=data.name,
@@ -71,12 +75,14 @@ async def create_consumer(
         schema_ids=data.schema_ids,
         mapping_profile_id=data.mapping_profile_id,
         active=data.active,
-        api_key=f"bc_{secrets.token_urlsafe(32)}",
+        api_key_hash=sha256hex(raw),
+        api_key_prefix=raw[:11],  # "bc_" + first 8 url-safe chars
     )
     session.add(consumer)
     await session.flush()
     await session.refresh(consumer)
-    return _model_to_read(consumer)
+    read = _model_to_read(consumer)
+    return ConsumerCreated(**read.model_dump(), api_key=raw)
 
 
 @router.get("/{consumer_id}")
@@ -190,11 +196,13 @@ async def change_feed(
     conditions = [DataRecord.workspace_id == str(role.workspace_id)]
 
     if cursor:
-        try:
-            cursor_dt = datetime.fromisoformat(cursor)
-            conditions.append(DataRecord.created_at > cursor_dt)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid cursor format (expected ISO timestamp)")
+        decoded = decode_cursor(cursor)
+        if decoded is None:
+            raise HTTPException(status_code=400, detail="Invalid cursor format")
+        cursor_dt, cursor_id = decoded
+        conditions.append(
+            tuple_(DataRecord.updated_at, DataRecord.id) > tuple_(cursor_dt, cursor_id)
+        )
 
     if schema_id:
         conditions.append(DataRecord.schema_id == schema_id)
@@ -204,7 +212,7 @@ async def change_feed(
     stmt = (
         select(DataRecord)
         .where(and_(*conditions))
-        .order_by(DataRecord.created_at.asc())
+        .order_by(DataRecord.updated_at.asc(), DataRecord.id.asc())
         .limit(limit + 1)
     )
     result = await session.execute(stmt)
@@ -216,7 +224,9 @@ async def change_feed(
     consumer.last_poll = datetime.utcnow()
     await session.flush()
 
-    new_cursor = records[-1].created_at.isoformat() if records else (cursor or "")
+    new_cursor = (
+        encode_cursor(records[-1].updated_at, records[-1].id) if records else (cursor or "")
+    )
 
     return ChangeFeedResponse(
         records=[

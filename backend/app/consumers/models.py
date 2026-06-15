@@ -18,14 +18,28 @@ class ConsumerCreate(BaseModel):
 
 
 class ConsumerRead(ConsumerCreate):
-    """Consumer with metadata."""
+    """Consumer with metadata.
+
+    Never exposes a stored secret: only the short, non-secret ``api_key_prefix``
+    for display. The raw token is returned once at creation via ``ConsumerCreated``.
+    """
 
     id: str
     workspace_id: str
-    api_key: str = Field(description="API key for external feed authentication")
+    api_key_prefix: str = Field(description="Non-secret API key prefix for display (e.g. 'bc_a1b2c3d4')")
     last_poll: str | None = None
     created_at: str
     updated_at: str
+
+
+class ConsumerCreated(ConsumerRead):
+    """Create-only response: includes the one-time raw API key.
+
+    Returned ONLY from the POST create endpoint. The raw ``api_key`` is shown
+    once and never persisted in plaintext or re-shown by any other endpoint.
+    """
+
+    api_key: str = Field(description="One-time raw API key — shown once, store it securely now")
 
 
 class ConsumerUpdate(BaseModel):

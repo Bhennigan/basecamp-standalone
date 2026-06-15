@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, Any
 from uuid import uuid4
 
-from sqlalchemy import String, Text, Integer, Float, Boolean, DateTime, ForeignKey, JSON, Enum as SQLEnum, UniqueConstraint
+from sqlalchemy import String, Text, Integer, Float, Boolean, DateTime, ForeignKey, JSON, Enum as SQLEnum, UniqueConstraint, Index
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
@@ -84,6 +84,11 @@ class IngestionJob(Base):
 
 class DataRecord(Base):
     __tablename__ = "data_record"
+    __table_args__ = (
+        # Composite index backing the consumer change feed keyset pagination
+        # (ORDER BY updated_at, id within a workspace). See consumers/external_router.py.
+        Index("ix_data_record_feed", "workspace_id", "updated_at", "id"),
+    )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
     workspace_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
@@ -91,6 +96,9 @@ class DataRecord(Base):
     ingestion_job_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("ingestion_job.id"), nullable=True)
     job_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
     data: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Canonical record envelope: inline lineage (_meta) + quality scores (_quality).
+    record_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    quality: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -127,8 +135,39 @@ class Consumer(Base):
     callback_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     schema_ids: Mapped[list] = mapped_column(JSONB, default=list)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    api_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # API key is never stored in plaintext: only a sha256 hash (for lookup) plus a short
+    # non-secret prefix (for display, e.g. "bc_a1b2c3"). The raw token is returned once at
+    # creation and never again. See consumers/auth.py for the resolution path.
+    api_key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    api_key_prefix: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     mapping_profile_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("mapping_profile.id"), nullable=True)
     last_poll: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ExtractedEntity(Base):
+    """An entity extracted/enriched from ingested data (email, domain, IP, person, etc.).
+
+    Consumed by the enrichment, graph, and connectors modules. The JSONB metadata column is
+    exposed as ``entity_metadata`` because SQLAlchemy's declarative API reserves the attribute
+    name ``metadata``; the source pydantic ``Entity.metadata`` maps onto it.
+    """
+    __tablename__ = "extracted_entity"
+    __table_args__ = (
+        Index("ix_extracted_entity_ws_type_value", "workspace_id", "entity_type", "normalized_value"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    threat_level: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_record_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tags: Mapped[list] = mapped_column(JSONB, default=list)
+    entity_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    first_seen: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

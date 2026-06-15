@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, tuple_
 
 from app.consumers.auth import ConsumerAuthDep
 from app.db.dependencies import AsyncDBSession
@@ -18,6 +18,32 @@ from app.transform.engine import transform_record
 from app.transform.models import FieldMapping
 
 router = APIRouter(prefix="", tags=["External API"])
+
+
+# --- Change-feed cursor helpers --------------------------------------------
+# Opaque cursor encoding a composite keyset on (updated_at, id). Defined here
+# and imported by consumers/router.py so both feeds share one implementation.
+
+def encode_cursor(updated_at: datetime, id: str) -> str:
+    """Encode a (updated_at, id) keyset position into an opaque cursor string."""
+    return f"{updated_at.isoformat()}|{id}"
+
+
+def decode_cursor(cursor: str) -> tuple[datetime, str] | None:
+    """Decode an opaque cursor into (updated_at, id).
+
+    Splits on the LAST '|' (record ids never contain '|', but timestamps don't
+    either, so this is robust regardless). Returns None if malformed.
+    """
+    if not cursor or "|" not in cursor:
+        return None
+    ts_part, _, id_part = cursor.rpartition("|")
+    if not ts_part or not id_part:
+        return None
+    try:
+        return datetime.fromisoformat(ts_part), id_part
+    except ValueError:
+        return None
 
 
 @router.get("/feed")
@@ -37,11 +63,13 @@ async def external_feed(
     conditions = [DataRecord.workspace_id == consumer.workspace_id]
 
     if cursor:
-        try:
-            cursor_dt = datetime.fromisoformat(cursor)
-            conditions.append(DataRecord.created_at > cursor_dt)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid cursor (expected ISO timestamp)")
+        decoded = decode_cursor(cursor)
+        if decoded is None:
+            raise HTTPException(status_code=400, detail="Invalid cursor format")
+        cursor_dt, cursor_id = decoded
+        conditions.append(
+            tuple_(DataRecord.updated_at, DataRecord.id) > tuple_(cursor_dt, cursor_id)
+        )
 
     if schema_id:
         conditions.append(DataRecord.schema_id == schema_id)
@@ -51,7 +79,7 @@ async def external_feed(
     stmt = (
         select(DataRecord)
         .where(and_(*conditions))
-        .order_by(DataRecord.created_at.asc())
+        .order_by(DataRecord.updated_at.asc(), DataRecord.id.asc())
         .limit(limit + 1)
     )
     result = await session.execute(stmt)
@@ -87,7 +115,9 @@ async def external_feed(
             "created_at": r.created_at.isoformat(),
         })
 
-    new_cursor = records[-1].created_at.isoformat() if records else (cursor or "")
+    new_cursor = (
+        encode_cursor(records[-1].updated_at, records[-1].id) if records else (cursor or "")
+    )
 
     return ChangeFeedResponse(
         records=output_records,

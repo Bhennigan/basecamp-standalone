@@ -9,6 +9,8 @@ import uuid
 
 from sqlalchemy import and_, func, select
 
+from datetime import datetime
+
 from app.basecamp.enums import FileFormat
 from app.basecamp.schemas import (
     DataExportRequest,
@@ -18,8 +20,10 @@ from app.basecamp.schemas import (
     DataRecordRead,
     DataRecordUpdate,
 )
-from app.db.models import DataRecord
+from app.compliance.models import DataLineage
+from app.db.models import BaseCampSchema, DataRecord
 from app.exceptions import TracecatNotFoundError
+from app.quality.scoring import score_record
 from app.service import BaseWorkspaceService
 
 
@@ -91,16 +95,40 @@ class DataRecordService(BaseWorkspaceService):
         Returns:
             The created record.
         """
+        schema_fields = await self._get_schema_fields(params.schema_id)
+
+        record_metadata = {"source_type": "api_direct"}
+
         record = DataRecord(
             workspace_id=self.workspace_id,
             schema_id=params.schema_id,
             job_id=None,
             data=params.data,
+            record_metadata=record_metadata,
+            quality=(
+                score_record(params.data, schema_fields, now=datetime.utcnow())
+                if schema_fields
+                else {}
+            ),
         )
 
         self.session.add(record)
         await self.session.flush()
         await self.session.refresh(record)
+
+        # Durable lineage row in the SAME transaction (no commit).
+        self.session.add(
+            DataLineage(
+                workspace_id=str(self.workspace_id),
+                record_id=str(record.id),
+                source_type="api_direct",
+                source_id=None,
+                transformation=None,
+                parent_record_id=None,
+                lineage_metadata=record_metadata,
+            )
+        )
+        await self.session.flush()
 
         self.logger.info("Created data record", record_id=str(record.id))
 
@@ -358,6 +386,26 @@ class DataRecordService(BaseWorkspaceService):
         output = io.BytesIO()
         wb.save(output)
         return output.getvalue()
+
+    async def _get_schema_fields(self, schema_id) -> list:
+        """Load a schema's field definitions for quality scoring.
+
+        Returns the raw ``BaseCampSchema.fields`` list, or ``[]`` when the
+        schema can't be resolved (so scoring degrades to an empty quality dict).
+        """
+        if not schema_id:
+            return []
+        stmt = select(BaseCampSchema).where(
+            and_(
+                BaseCampSchema.workspace_id == self.workspace_id,
+                BaseCampSchema.id == schema_id,
+            )
+        )
+        result = await self.session.execute(stmt)
+        schema = result.scalar_one_or_none()
+        if schema and isinstance(schema.fields, list):
+            return schema.fields
+        return []
 
     async def _get_record_model(self, record_id: uuid.UUID) -> DataRecord:
         """Get the raw record model.

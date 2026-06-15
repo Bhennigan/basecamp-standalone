@@ -11,10 +11,12 @@ from app.basecamp.integration.router import router as integration_router
 from app.transform.router import router as transform_router
 from app.consumers.router import router as consumers_router
 from app.consumers.external_router import router as external_router
+from app.resolution import router as resolution_router
 from app.db.database import engine
 from app.db.models import Base
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +42,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS — origins come from the ALLOWED_ORIGINS env var (comma-separated). Defaults to the
+# local dev UI rather than a wildcard so production deployments must opt in explicitly.
+_allowed_origins = [
+    o.strip()
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -69,6 +77,9 @@ app.include_router(consumers_router, prefix="/api/basecamp/consumers", tags=["Co
 
 # External API (API key auth — no workspace headers needed)
 app.include_router(external_router, prefix="/api/v1", tags=["External API"])
+
+# Entity resolution (clusters records representing the same real-world entity)
+app.include_router(resolution_router, prefix="/api/basecamp/resolution", tags=["Entity Resolution"])
 
 
 if __name__ == "__main__":
