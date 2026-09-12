@@ -301,7 +301,12 @@ class IngestionService(BaseWorkspaceService):
                         "transformations": transform_names,
                     }
 
+                    # Generate the record id up front. DataRecord.id has a
+                    # flush-time column default, so record.id is None until the
+                    # session flushes; the DataLineage row below needs it now.
+                    rec_id = str(uuid.uuid4())
                     record = DataRecord(
+                        id=rec_id,
                         workspace_id=self.workspace_id,
                         schema_id=schema_id,
                         ingestion_job_id=job.id,
@@ -326,7 +331,7 @@ class IngestionService(BaseWorkspaceService):
                     self.session.add(
                         DataLineage(
                             workspace_id=str(self.workspace_id),
-                            record_id=str(record.id),
+                            record_id=rec_id,
                             source_type="file_ingestion",
                             source_id=str(job.id),
                             transformation=(

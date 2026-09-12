@@ -1,0 +1,133 @@
+[
+  {
+    "element": "node",
+    "type": "Segment",
+    "id": "segment:user-vlan"
+  },
+  {
+    "element": "node",
+    "type": "Segment",
+    "id": "segment:server-vlan"
+  },
+  {
+    "element": "node",
+    "type": "Host",
+    "id": "host:ws01",
+    "ip": "10.10.1.20",
+    "os": "Windows 11",
+    "foothold": true
+  },
+  {
+    "element": "node",
+    "type": "Host",
+    "id": "host:fs01",
+    "ip": "10.10.2.10",
+    "os": "Windows Server 2022"
+  },
+  {
+    "element": "node",
+    "type": "Host",
+    "id": "host:dc01",
+    "ip": "10.10.2.5",
+    "os": "Windows Server 2022",
+    "role": "domain_controller"
+  },
+  {
+    "element": "node",
+    "type": "Identity",
+    "id": "identity:alice",
+    "kind": "user"
+  },
+  {
+    "element": "node",
+    "type": "Identity",
+    "id": "identity:svc_backup",
+    "kind": "service_account"
+  },
+  {
+    "element": "node",
+    "type": "Identity",
+    "id": "identity:administrator",
+    "kind": "user",
+    "privileged": true
+  },
+  {
+    "element": "node",
+    "type": "Group",
+    "id": "group:domain admins",
+    "privileged": true
+  },
+  {
+    "element": "node",
+    "type": "Vulnerability",
+    "id": "cve:cve-2021-34527",
+    "name": "PrintNightmare",
+    "cvss": 8.8
+  },
+  {
+    "element": "edge",
+    "src": "host:ws01",
+    "type": "IN_SEGMENT",
+    "dst": "segment:user-vlan"
+  },
+  {
+    "element": "edge",
+    "src": "host:fs01",
+    "type": "IN_SEGMENT",
+    "dst": "segment:server-vlan"
+  },
+  {
+    "element": "edge",
+    "src": "host:dc01",
+    "type": "IN_SEGMENT",
+    "dst": "segment:server-vlan"
+  },
+  {
+    "element": "edge",
+    "src": "segment:user-vlan",
+    "type": "CONNECTS_TO",
+    "dst": "segment:server-vlan"
+  },
+  {
+    "element": "edge",
+    "src": "host:ws01",
+    "type": "HAS_SESSION",
+    "dst": "identity:alice"
+  },
+  {
+    "element": "edge",
+    "src": "identity:alice",
+    "type": "CAN_AUTH_TO",
+    "dst": "host:fs01"
+  },
+  {
+    "element": "edge",
+    "src": "host:fs01",
+    "type": "HAS_SESSION",
+    "dst": "identity:svc_backup"
+  },
+  {
+    "element": "edge",
+    "src": "identity:svc_backup",
+    "type": "ADMIN_TO",
+    "dst": "host:dc01"
+  },
+  {
+    "element": "edge",
+    "src": "identity:svc_backup",
+    "type": "MEMBER_OF",
+    "dst": "group:domain admins"
+  },
+  {
+    "element": "edge",
+    "src": "host:dc01",
+    "type": "HAS_VULNERABILITY",
+    "dst": "cve:cve-2021-34527"
+  },
+  {
+    "element": "edge",
+    "src": "group:domain admins",
+    "type": "CAN_AUTH_TO",
+    "dst": "identity:administrator"
+  }
+]
